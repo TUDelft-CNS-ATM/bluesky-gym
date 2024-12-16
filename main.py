@@ -13,12 +13,13 @@ import numpy as np
 
 import bluesky_gym
 import bluesky_gym.envs
+from bluesky_gym.wrappers.wind import WindFieldWrapper
 
 from bluesky_gym.utils import logger
 
 bluesky_gym.register_envs()
 
-env_name = 'StaticObstacleEnv-v0'
+env_name = 'MergeEnv-v0'
 algorithm = SAC
 
 # Initialize logger
@@ -26,14 +27,14 @@ log_dir = f'./logs/{env_name}/'
 file_name = f'{env_name}_{str(algorithm.__name__)}.csv'
 csv_logger_callback = logger.CSVLoggerCallback(log_dir, file_name)
 
-TRAIN = False
+TRAIN = True
 EVAL_EPISODES = 10
 
 
 if __name__ == "__main__":
-    env = gym.make(env_name, render_mode=None)
-    obs, info = env.reset()
-    model = algorithm("MultiInputPolicy", env, verbose=1,learning_rate=3e-4)
+    env = gym.make(env_name, render_mode='human')
+    windy_env = WindFieldWrapper(env, lat=np.array([52]), lon=np.array([4]), vnorth=np.array([[50]]), veast=np.array([[0]]), alt=None, augment_obs=True)
+    model = algorithm("MultiInputPolicy", windy_env, verbose=1,learning_rate=3e-4)
     if TRAIN:
         model.learn(total_timesteps=2e6, callback=csv_logger_callback)
         model.save(f"models/{env_name}/{env_name}_{str(algorithm.__name__)}/model")
