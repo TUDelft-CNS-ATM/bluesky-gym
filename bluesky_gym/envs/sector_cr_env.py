@@ -47,7 +47,6 @@ class SectorCREnv(gym.Env):
         self.window_height = 512
         self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
         self.density_mode = ac_density_mode
-        self.reset_counter = 0
         self.poly_name = 'airspace'
         # Feel free to add more observation spaces
         self.observation_space = spaces.Dict(
@@ -112,8 +111,6 @@ class SectorCREnv(gym.Env):
         
         if self.render_mode == "human":
             self._render_frame()
-
-        self.reset_counter += 1
 
         return observation, info
     
