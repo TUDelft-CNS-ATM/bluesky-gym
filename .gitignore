@@ -6,3 +6,10 @@ images/
 logs/
 models/
 dist/
+
+#bluesky distribution only
+output/
+plugins/
+scenario/
+cache/
+settings.cfg
