@@ -9,7 +9,7 @@ dist/
 
 #bluesky distribution only
 output/
-plugins/
+/plugins/
 scenario/
 cache/
 settings.cfg
