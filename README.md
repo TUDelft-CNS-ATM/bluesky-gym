@@ -10,11 +10,10 @@ Build on [BlueSky](https://github.com/TUDelft-CNS-ATM/bluesky) and The Farama Fo
 For a complete list of the currently available environments click [here](bluesky_gym/envs/README.md)
 
 ## Installation
-**Update 27 February 2025:** *There is currently a bug when pip installing BlueSky-Simulator, which causes the pip install to fail on most machines (see [issue](https://github.com/TUDelft-CNS-ATM/bluesky/issues/543)). For now, users can clone the repository linked in [this](https://github.com/TUDelft-CNS-ATM/bluesky-gym/tree/main_bluesky) branch and pip install the requirements.txt file to circumvent this problem. This branch contains a local, barebones, version of BlueSky-Simulator from which the required functionality is retrieved.*
+This branch of BlueSky-Gym is currently provided as an alternative to pip installing untill the [issue](https://github.com/TUDelft-CNS-ATM/bluesky/issues/543) with pip installing bluesky-simulator is resolved.
+To use, download the .zip or clone this branch and install the packages provided in requirements.txt.
 
-`pip install bluesky-gym`
-
-Note that the pip package is `bluesky-gym`, for usage however, import as `bluesky_gym`.
+Tested with python 3.11 and 3.12
 
 ## Usage
 Using the environments follows the standard API from Gymnasium, an example of which is given below:
