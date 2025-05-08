@@ -410,7 +410,6 @@ class StaticObstacleEnvAlts(gym.Env):
         )
 
         ac_alt = bs.traf.alt[bs.traf.id2idx('KL001')]
-        print(ac_alt)
         label = font.render(f"FL{int(ac_alt)}", True, (0, 255, 0))
         canvas.blit(label, (x_actor, y_actor - 10))  # Offset upward
 
