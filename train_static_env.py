@@ -5,7 +5,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 
 bluesky_gym.register_envs()
 
-env = gym.make('StaticObstacleEnv-v0', render_mode=None)
+env = gym.make('StaticObstacleEnv-v1', render_mode=None)
 model = DDPG("MultiInputPolicy",env,tensorboard_log="log")
 
 checkpoint_callback = CheckpointCallback(
@@ -14,11 +14,10 @@ checkpoint_callback = CheckpointCallback(
     name_prefix="ddpg_model"         # Prefix for checkpoint files
 )
 
-print('learn')
-# model.learn(total_timesteps=2e6, progress_bar=True, callback=checkpoint_callback)
-# model.save("model")
+model.learn(total_timesteps=2e6, progress_bar=True, callback=checkpoint_callback)
+model.save("model")
 
-env = gym.make('StaticObstacleEnv-v0', render_mode='human')
+env = gym.make('StaticObstacleEnv-v1', render_mode='human')
 
 # model = DDPG.load("./model.zip", env=env) 
 model = DDPG.load("checkpoints/ddpg_model_450000_steps.zip", env=env) 

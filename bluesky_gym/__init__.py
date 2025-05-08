@@ -34,8 +34,20 @@ def register_envs():
     )
 
     register(
+        id="SectorCREnv-v1",
+        entry_point="bluesky_gym.envs.sector_cr_env_altitudes:SectorCREnvAlts",
+        max_episode_steps=200,
+    )
+
+    register(
         id="StaticObstacleEnv-v0",
         entry_point="bluesky_gym.envs.static_obstacle_env:StaticObstacleEnv",
+        max_episode_steps=100,
+    )
+
+    register(
+        id="StaticObstacleEnv-v1",
+        entry_point="bluesky_gym.envs.static_obstacle_env_altitudes:StaticObstacleEnvAlts",
         max_episode_steps=100,
     )
 
