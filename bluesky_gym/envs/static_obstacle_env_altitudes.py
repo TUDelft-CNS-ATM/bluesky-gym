@@ -23,8 +23,12 @@ WAYPOINT_DISTANCE_MAX = 170 # KM
 OBSTACLE_DISTANCE_MIN = 20 # KM
 OBSTACLE_DISTANCE_MAX = 150 # KM
 
+OBSTACLE_ALTITUDE_MIN = 330
+OBSTACLE_ALTITUDE_MAX = 370
+
 D_HEADING = 45 #degrees
 D_SPEED = 20/3 # kts (check)
+V_SPEED = 5
 
 AC_SPD = 150 # kts
 ALTITUDE = 350 # In FL
@@ -65,12 +69,12 @@ class StaticObstacleEnvAlts(gym.Env):
                 "restricted_area_radius": spaces.Box(0, 1, shape = (NUM_OBSTACLES,), dtype=np.float64),
                 "restricted_area_distance": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES, ), dtype=np.float64),
                 "cos_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64),
-                "sin_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64)
-
+                "sin_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64),
+                "obstacle_altitude_diff": spaces.Box(-np.inf, np.inf, shape=(NUM_OBSTACLES,), dtype=np.float64)
             }
         )
        
-        self.action_space = spaces.Box(-1, 1, shape=(2,), dtype=np.float64)
+        self.action_space = spaces.Box(-1, 1, shape=(3,), dtype=np.float64)
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -222,6 +226,7 @@ class StaticObstacleEnvAlts(gym.Env):
     def _generate_coordinates_centre_obstacles(self, acid = 'KL001', num_obstacles = NUM_OBSTACLES):
         self.obstacle_centre_lat = []
         self.obstacle_centre_lon = []
+        self.obstacle_centre_alt = []
         
         for i in range(num_obstacles):
             obstacle_dis_from_reference = np.random.randint(OBSTACLE_DISTANCE_MIN, OBSTACLE_DISTANCE_MAX)
@@ -231,6 +236,10 @@ class StaticObstacleEnvAlts(gym.Env):
             obstacle_centre_lat, obstacle_centre_lon = fn.get_point_at_distance(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], obstacle_dis_from_reference, obstacle_hdg_from_reference)    
             self.obstacle_centre_lat.append(obstacle_centre_lat)
             self.obstacle_centre_lon.append(obstacle_centre_lon)
+
+            # random obstacle altitudes
+            obstacle_altitude = np.random.randint(OBSTACLE_ALTITUDE_MIN, OBSTACLE_ALTITUDE_MAX)
+            self.obstacle_centre_alt.append(obstacle_altitude)
 
     def _get_obs(self):
         ac_idx = bs.traf.id2idx('KL001')
@@ -271,6 +280,13 @@ class StaticObstacleEnvAlts(gym.Env):
             self.obstacle_centre_cos_bearing.append(np.cos(np.deg2rad(bearing)))
             self.obstacle_centre_sin_bearing.append(np.sin(np.deg2rad(bearing)))
 
+        altitude_diffs = []
+        ac_alt = bs.traf.alt[ac_idx]
+
+        for obs_alt in self.obstacle_centre_alt:
+            diff = (ac_alt - obs_alt) / 700.0  # normalize by 700 ft
+            altitude_diffs.append(diff)
+
         observation = {
                 "destination_waypoint_distance": np.array(self.destination_waypoint_distance)/WAYPOINT_DISTANCE_MAX,
                 "destination_waypoint_cos_drift": np.array(self.destination_waypoint_cos_drift),
@@ -279,6 +295,7 @@ class StaticObstacleEnvAlts(gym.Env):
                 "restricted_area_distance": np.array(self.obstacle_centre_distance)/WAYPOINT_DISTANCE_MAX,
                 "cos_difference_restricted_area_pos": np.array(self.obstacle_centre_cos_bearing),
                 "sin_difference_restricted_area_pos": np.array(self.obstacle_centre_sin_bearing),
+                "obstacle_altitude_diff": np.array(altitude_diffs)
             }
 
         return observation
@@ -331,26 +348,38 @@ class StaticObstacleEnvAlts(gym.Env):
         reward = 0
         terminate = 0
         for obs_idx in range(NUM_OBSTACLES):
-            if bs.tools.areafilter.checkInside(self.obstacle_names[obs_idx], np.array([bs.traf.lat[ac_idx]]), np.array([bs.traf.lon[ac_idx]]), np.array([bs.traf.alt[ac_idx]])):
+            vert_inside = abs(bs.traf.alt[ac_idx] - self.obstacle_centre_alt[obs_idx]) < 10
+            hor_inside = bs.tools.areafilter.checkInside(self.obstacle_names[obs_idx], np.array([bs.traf.lat[ac_idx]]), np.array([bs.traf.lon[ac_idx]]), np.array([bs.traf.alt[ac_idx]]))
+            
+            if vert_inside and hor_inside:
                 reward += RESTRICTED_AREA_INTRUSION_PENALTY
                 self.crashed = 1
                 terminate = 1
+
         return reward, terminate
 
     def _get_action(self,action):
         dh = action[0] * D_HEADING
         dv = action[1] * D_SPEED
+        dvs = action[2] * V_SPEED
+
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx('KL001')] + dh)
         speed_new = (bs.traf.cas[bs.traf.id2idx('KL001')] + dv) * MpS2Kt
+        altitude_new = bs.traf.alt[bs.traf.id2idx('KL001')] + dvs
 
         bs.stack.stack(f"HDG {'KL001'} {heading_new}")
         bs.stack.stack(f"SPD {'KL001'} {speed_new}")
+        bs.stack.stack("AP KL001 ON")
+        bs.stack.stack(f"ALT KL001 {altitude_new}")
 
     def _render_frame(self):
         if self.window is None and self.render_mode == "human":
             pygame.init()
+            pygame.font.init()
             pygame.display.init()
             self.window = pygame.display.set_mode(self.window_size)
+
+        font = pygame.font.SysFont(None, 20)
             
 
         if self.clock is None and self.render_mode == "human":
@@ -380,6 +409,11 @@ class StaticObstacleEnvAlts(gym.Env):
             width = 5
         )
 
+        ac_alt = bs.traf.alt[bs.traf.id2idx('KL001')]
+        print(ac_alt)
+        label = font.render(f"FL{int(ac_alt)}", True, (0, 255, 0))
+        canvas.blit(label, (x_actor, y_actor - 10))  # Offset upward
+
         # draw heading line
         heading_length = 50
         heading_end_x = ((np.sin(np.deg2rad(bs.traf.hdg[ac_idx])) * heading_length)/MAX_DISTANCE)*self.window_width
@@ -393,7 +427,7 @@ class StaticObstacleEnvAlts(gym.Env):
         )
 
         # draw obstacles
-        for vertices in self.obstacle_vertices:
+        for i, vertices in enumerate(self.obstacle_vertices):
             points = []
             for coord in vertices:
                 lat_ref = coord[0]
@@ -406,6 +440,16 @@ class StaticObstacleEnvAlts(gym.Env):
             pygame.draw.polygon(canvas,
                 (0,0,0), points
             )
+            centroid_x = sum([p[0] for p in points]) / len(points)
+            centroid_y = sum([p[1] for p in points]) / len(points)
+
+            # Get altitude for this obstacle
+            obs_alt = self.obstacle_centre_alt[i]  # This requires using enumerate
+
+            # Render label
+            font = pygame.font.SysFont(None, 20)
+            label = font.render(f"FL{int(obs_alt)}", True, (255, 255, 255))  # White text
+            canvas.blit(label, (centroid_x, centroid_y))
 
         # draw target waypoint
         indx = 0

@@ -36,7 +36,7 @@ INTRUSION_PENALTY = -1
 D_HEADING = 22.5 # deg
 D_VELOCITY = 20/3 # kts
 
-class SectorCREnv(gym.Env):
+class SectorCREnvAlts(gym.Env):
     """ 
     Sector Conflict Resolution Environment
     """
