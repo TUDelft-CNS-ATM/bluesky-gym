@@ -6,6 +6,7 @@ images/
 logs/
 models/
 dist/
+venv/
 
 #bluesky distribution only
 output/
