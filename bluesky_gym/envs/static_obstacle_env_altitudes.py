@@ -372,10 +372,15 @@ class StaticObstacleEnvAlts(gym.Env):
         bs.stack.stack("AP KL001 ON")
         bs.stack.stack(f"ALT KL001 {altitude_new}")
 
+
+    def render(self):
+        return self._render_frame()
+    
+
     def _render_frame(self):
+        pygame.font.init()
         if self.window is None and self.render_mode == "human":
             pygame.init()
-            pygame.font.init()
             pygame.display.init()
             self.window = pygame.display.set_mode(self.window_size)
 
@@ -478,11 +483,15 @@ class StaticObstacleEnvAlts(gym.Env):
                 width = 2
             )
 
-        self.window.blit(canvas, canvas.get_rect())
-        
-        pygame.display.update()
-        
-        self.clock.tick(self.metadata["render_fps"])
+        if self.render_mode == "human":
+            self.window.blit(canvas, canvas.get_rect())
+            pygame.display.update()
+            self.clock.tick(self.metadata["render_fps"])
+            return None
+
+        elif self.render_mode == "rgb_array":
+            # Return NumPy array from canvas
+            return pygame.surfarray.pixels3d(canvas).swapaxes(0, 1).copy()
 
     def close(self):
         pass
