@@ -18,7 +18,7 @@ from bluesky_gym.utils import logger
 
 bluesky_gym.register_envs()
 
-env_name = 'StaticObstacleEnvAlts-v0'
+env_name = 'SectorCREnv-v1'
 algorithm = PPO
 
 # Initialize logger
@@ -26,12 +26,12 @@ log_dir = f'./logs/{env_name}/'
 file_name = f'{env_name}_{str(algorithm.__name__)}.csv'
 csv_logger_callback = logger.CSVLoggerCallback(log_dir, file_name)
 
-TRAIN = True
+TRAIN = False
 EVAL_EPISODES = 10
 
 
 if __name__ == "__main__":
-    env = gym.make(env_name, render_mode='human')
+    env = gym.make(env_name, render_mode=None)
     obs, info = env.reset()
     model = algorithm("MultiInputPolicy", env, verbose=1,learning_rate=3e-4)
     if TRAIN:
@@ -41,7 +41,8 @@ if __name__ == "__main__":
     env.close()
     
     # Test the trained model
-    model = algorithm.load(f"models/{env_name}/{env_name}_{str(algorithm.__name__)}/model", env=env)
+    # model = algorithm.load(f"models/{env_name}/{env_name}_{str(algorithm.__name__)}/model", env=env)
+    model = algorithm.load("/Users/scottpena/Documents/GitHub/bluesky-gym-altitude-variation/model_altitude_test_ppo_sector.zip")
     env = gym.make(env_name, render_mode="human")
     for i in range(EVAL_EPISODES):
 

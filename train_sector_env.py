@@ -16,5 +16,5 @@ checkpoint_callback = CheckpointCallback(
 )
 
 model.learn(total_timesteps=2e6, progress_bar=True, callback=checkpoint_callback)
-model.save("model_altitude_test_ppo")
+model.save("model_altitude_test_ppo_sector")
 

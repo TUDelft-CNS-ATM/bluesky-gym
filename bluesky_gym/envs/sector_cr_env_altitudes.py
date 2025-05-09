@@ -411,6 +411,8 @@ class SectorCREnvAlts(gym.Env):
             pygame.init()
             pygame.display.init()
             self.window = pygame.display.set_mode(self.window_size)
+            pygame.font.init()
+            self.font = pygame.font.SysFont('Arial', 14)
 
         if self.clock is None and self.render_mode == "human":
             self.clock = pygame.time.Clock()
@@ -431,6 +433,7 @@ class SectorCREnvAlts(gym.Env):
         ac_idx = bs.traf.id2idx(ACTOR)
         ac_length = 10
         ac_hdg = bs.traf.hdg[ac_idx]
+        ac_alt = int(bs.traf.alt[ac_idx])
         heading_end_x = np.cos(np.deg2rad(ac_hdg)) * ac_length
         heading_end_y = np.sin(np.deg2rad(ac_hdg)) * ac_length
         ac_qdr, ac_dis = bs.tools.geo.kwikqdrdist(CENTER[0], CENTER[1], bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
@@ -456,6 +459,9 @@ class SectorCREnvAlts(gym.Env):
                 ((x_pos)+heading_end_x,(y_pos)-heading_end_y),
                 width = 1
         )
+        
+        alt_text = self.font.render(f"FL{ac_alt // 100}", True, (0, 0, 0))
+        canvas.blit(alt_text, (x_pos + 5, y_pos - 20))
 
         # Draw intruders
         ac_length = 3
@@ -463,6 +469,7 @@ class SectorCREnvAlts(gym.Env):
         for i in range(self.num_ac-1):
             int_idx = i+1
             int_hdg = bs.traf.hdg[int_idx]
+            int_alt = int(bs.traf.alt[int_idx])
             heading_end_x = np.cos(np.deg2rad(int_hdg)) * ac_length
             heading_end_y = np.sin(np.deg2rad(int_hdg)) * ac_length
 
@@ -504,6 +511,14 @@ class SectorCREnvAlts(gym.Env):
                 radius = INTRUSION_DISTANCE*NM2KM*px_per_km,
                 width = 2
             )
+            
+            # Altitude ring
+            pygame.draw.circle(canvas, color, (x_pos, y_pos),
+                            radius=INTRUSION_DISTANCE * NM2KM * px_per_km, width=2)
+
+            # Draw intruder altitude
+            alt_text = self.font.render(f"FL{int_alt // 100}", True, color)
+            canvas.blit(alt_text, (x_pos + 5, y_pos - 20))
 
         self.window.blit(canvas, canvas.get_rect())
         pygame.display.update()
