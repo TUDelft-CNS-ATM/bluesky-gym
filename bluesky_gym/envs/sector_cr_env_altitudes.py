@@ -16,6 +16,11 @@ POLY_AREA_RANGE = (2400, 3750) # In NM^2
 CENTER = np.array([51.990426702297746, 4.376124857109851]) # TU Delft AE Faculty coordinates
 ALTITUDE = 350 # In FL
 
+ALT_MIN = 280  # In FL
+ALT_MAX = 400  # In FL
+ALTITUDE_LAYERS = 4  # Number of altitude layers in the sector
+VERTICAL_SEPARATION = 20  # Minimum vertical separation in FL
+
 # Aircraft parameters
 AC_SPD = 150
 AC_TYPE = "A320"
@@ -27,6 +32,7 @@ MpS2Kt = 1.94384
 FL2M = 30.48
 
 INTRUSION_DISTANCE = 5 # NM
+INTRUSION_ALTITUDE = 10
 
 # Model parameters
 ACTION_FREQUENCY = 5
@@ -35,6 +41,7 @@ DRIFT_PENALTY = -0.1
 INTRUSION_PENALTY = -1
 D_HEADING = 22.5 # deg
 D_VELOCITY = 20/3 # kts
+D_ALTITUDE = 10
 
 class SectorCREnvAlts(gym.Env):
     """ 
@@ -58,13 +65,15 @@ class SectorCREnvAlts(gym.Env):
                 "y_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "vx_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "vy_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
+                "alt_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "cos(track)": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
                 "sin(track)": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
-                "distances": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64)
+                "distances": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
+                "vertical_distances": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64)
             }
         )
 
-        self.action_space = spaces.Box(-1, 1, shape=(2,), dtype=np.float64)
+        self.action_space = spaces.Box(-1, 1, shape=(3,), dtype=np.float64)
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -80,6 +89,9 @@ class SectorCREnvAlts(gym.Env):
         self.total_reward = 0
         self.total_intrusions = 0
         self.average_drift = np.array([])
+        
+        self.altitude_deviations = np.array([])
+        self.altitude_layers = np.linspace(ALT_MIN, ALT_MAX, ALTITUDE_LAYERS)
 
         self.window = None
         self.clock = None
@@ -92,6 +104,7 @@ class SectorCREnvAlts(gym.Env):
         self.total_reward = 0
         self.total_intrusions = 0
         self.average_drift = np.array([])
+        self.altitude_deviations = np.array([])
        
         self._generate_polygon() # Create airspace polygon
         
@@ -186,6 +199,7 @@ class SectorCREnvAlts(gym.Env):
             frac = (d - current_d) / edge[2]
             p = edge[0] + frac * (edge[1] - edge[0])
             self.wpts.append(p)
+        self.wpt_altitudes = np.random.choice(self.altitude_layers, size=len(self.wpts))
         
     def _generate_ac(self) -> None:
         
@@ -203,36 +217,54 @@ class SectorCREnvAlts(gym.Env):
             if bs.tools.areafilter.checkInside(self.poly_name, np.array([p[0]]), np.array([p[1]]), np.array([ALTITUDE*FL2M])):
                 init_p_latlong.append(p)
         
+        init_altitudes = np.random.choice(self.altitude_layers, size=len(init_p_latlong))
         wpt_agent = fn.nm_to_latlong(CENTER, self.wpts[0])
         init_pos_agent = init_p_latlong[0]
         hdg_agent = fn.get_hdg(init_pos_agent, wpt_agent)
         
         # Actor AC is the only one that has ACTOR as acid
-        bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=init_pos_agent[0], aclon=init_pos_agent[1], achdg=hdg_agent, acspd=AC_SPD, acalt=ALTITUDE)
+        bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=init_pos_agent[0], aclon=init_pos_agent[1], 
+                    achdg=hdg_agent, acspd=AC_SPD, acalt=init_altitudes[0])
         
         for i in range(1, len(init_p_latlong)):
             wpt = fn.nm_to_latlong(CENTER, self.wpts[i])
             init_pos = init_p_latlong[i]
             hdg = fn.get_hdg(init_pos, wpt)
-            bs.traf.cre(acid=str(i), actype=AC_TYPE, aclat=init_pos[0], aclon=init_pos[1], achdg=hdg, acspd=AC_SPD, acalt=ALTITUDE)
+            bs.traf.cre(acid=str(i), actype=AC_TYPE, aclat=init_pos[0], aclon=init_pos[1], 
+                       achdg=hdg, acspd=AC_SPD, acalt=init_altitudes[i])
     
     def _get_info(self):
         # Here you implement any additional info that you want to log after an episode
         return {
             'total_reward': self.total_reward,
             'total_intrusions': self.total_intrusions,
-            'average_drift': self.average_drift.mean()
+            'average_drift': self.average_drift.mean(),
+            'average_altitude_deviation': self.altitude_deviations.mean() if len(self.altitude_deviations) > 0 else 0
         }
     
     def _get_reward(self):
         
         drift_reward = self._check_drift()
         intrusion_reward = self._check_intrusion()
+        altitude_reward = self._check_altitude()
 
-        total_reward = drift_reward + intrusion_reward
+        total_reward = drift_reward + intrusion_reward + altitude_reward
         self.total_reward += total_reward
 
         return total_reward
+    
+    def _check_altitude(self):
+        """Calculate reward for altitude maintenance"""
+        ac_idx = bs.traf.id2idx(ACTOR)
+        current_alt = bs.traf.alt[ac_idx] / FL2M  # Convert to FL
+        target_alt = self.wpt_altitudes[0]  # Target altitude for agent's waypoint
+        
+        # Calculate altitude deviation as percentage of acceptable range
+        alt_deviation = abs(current_alt - target_alt) / VERTICAL_SEPARATION
+        self.altitude_deviations = np.append(self.altitude_deviations, alt_deviation)
+        
+        # Apply penalty similar to drift (normalized to same scale)
+        return alt_deviation * DRIFT_PENALTY
     
     def _get_observation(self):
 
@@ -242,18 +274,22 @@ class SectorCREnvAlts(gym.Env):
         self.cos_drift = np.array([])
         self.sin_drift = np.array([])
         self.airspeed = np.array([])
+        self.altitude = np.array([])
         self.x_r = np.array([])
         self.y_r = np.array([])
         self.vx_r = np.array([])
         self.vy_r = np.array([])
+        self.alt_r = np.array([])
         self.cos_track = np.array([])
         self.sin_track = np.array([])
         self.distances = np.array([])
+        self.vertical_distances = np.array([])
 
         # Drift of agent aircraft for reward calculation
         drift = 0
 
         ac_hdg = bs.traf.hdg[ac_idx]
+        ac_alt = bs.traf.alt[ac_idx] / FL2M
         
         # Get and decompose agent aircaft drift
         wpts = fn.nm_to_latlong(CENTER, self.wpts[ac_idx])
@@ -267,6 +303,8 @@ class SectorCREnvAlts(gym.Env):
 
         # Get agent aircraft airspeed, m/s
         self.airspeed = np.append(self.airspeed, bs.traf.tas[ac_idx])
+        
+        self.altitude = np.append(self.altitude, (ac_alt - ALT_MIN) / (ALT_MAX - ALT_MIN))
 
         vx = np.cos(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
         vy = np.sin(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
@@ -278,6 +316,7 @@ class SectorCREnvAlts(gym.Env):
         for i in range(self.num_ac-1):
             ac_idx = ac_idx_by_dist[i]+1
             int_hdg = bs.traf.hdg[ac_idx]
+            int_alt = bs.traf.alt[ac_idx] / FL2M 
             
             # Intruder AC relative position, m
             int_loc = fn.latlong_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx]])) * NM2KM * 1000
@@ -289,6 +328,8 @@ class SectorCREnvAlts(gym.Env):
             vy_int = np.sin(np.deg2rad(int_hdg)) * bs.traf.tas[ac_idx]
             self.vx_r = np.append(self.vx_r, vx_int - vx)
             self.vy_r = np.append(self.vy_r, vy_int - vy)
+            
+            self.alt_r = np.append(self.alt_r, int_alt - ac_alt)
 
             # Intruder AC relative track, rad
             track = np.arctan2(vy_int - vy, vx_int - vx)
@@ -296,18 +337,37 @@ class SectorCREnvAlts(gym.Env):
             self.sin_track = np.append(self.sin_track, np.sin(track))
 
             self.distances = np.append(self.distances, distances[ac_idx-1])
+            self.vertical_distances = np.append(self.vertical_distances, abs(int_alt - ac_alt))
 
+        # observation = {
+        #     "cos(drift)": self.cos_drift,
+        #     "sin(drift)": self.sin_drift,
+        #     "airspeed": (self.airspeed-150)/6,
+        #     "altitude": self.altitude,
+        #     "x_r": self.x_r[:NUM_AC_STATE]/13000,
+        #     "y_r": self.y_r[:NUM_AC_STATE]/13000,
+        #     "vx_r": self.vx_r[:NUM_AC_STATE]/32,
+        #     "vy_r": self.vy_r[:NUM_AC_STATE]/66,
+        #     "alt_r": self.alt_r[:NUM_AC_STATE]/50,
+        #     "cos(track)": self.cos_track[:NUM_AC_STATE],
+        #     "sin(track)": self.sin_track[:NUM_AC_STATE],
+        #     "distances": (self.distances[:NUM_AC_STATE]-50000.)/15000.,
+        #     "vertical_distances": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64)   
+        # }
+        
         observation = {
-            "cos(drift)": self.cos_drift,
-            "sin(drift)": self.sin_drift,
             "airspeed": (self.airspeed-150)/6,
-            "x_r": self.x_r[:NUM_AC_STATE]/13000,
-            "y_r": self.y_r[:NUM_AC_STATE]/13000,
+            "alt_r": self.alt_r[:NUM_AC_STATE]/50,
+            "cos(drift)": self.cos_drift,
+            "cos(track)": self.cos_track[:NUM_AC_STATE],
+            "distances": (self.distances[:NUM_AC_STATE]-50000.)/15000.,
+            "sin(drift)": self.sin_drift,
+            "sin(track)": self.sin_track[:NUM_AC_STATE],
+            "vertical_distances": self.vertical_distances[:NUM_AC_STATE]/VERTICAL_SEPARATION,  # Fixed typo
             "vx_r": self.vx_r[:NUM_AC_STATE]/32,
             "vy_r": self.vy_r[:NUM_AC_STATE]/66,
-            "cos(track)": self.cos_track[:NUM_AC_STATE],
-            "sin(track)": self.sin_track[:NUM_AC_STATE],
-            "distances": (self.distances[:NUM_AC_STATE]-50000.)/15000.
+            "x_r": self.x_r[:NUM_AC_STATE]/13000,
+            "y_r": self.y_r[:NUM_AC_STATE]/13000
         }
 
         return observation
@@ -315,11 +375,16 @@ class SectorCREnvAlts(gym.Env):
     def _get_action(self, action):
         dh = action[0] * D_HEADING
         dv = action[1] * D_VELOCITY
+        da = action[2] * D_ALTITUDE
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx(ACTOR)] + dh)
         speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt
+        current_alt_fl = bs.traf.alt[bs.traf.id2idx(ACTOR)] / FL2M
+        altitude_new = current_alt_fl + da
+        altitude_new = max(ALT_MIN, min(ALT_MAX, altitude_new))
 
         bs.stack.stack(f"HDG {ACTOR} {heading_new}")
         bs.stack.stack(f"SPD {ACTOR} {speed_new}")
+        bs.stack.stack(f"ALT {ACTOR} {altitude_new}")
 
     def _check_drift(self):
         drift = abs(np.deg2rad(self.drift))
@@ -329,10 +394,13 @@ class SectorCREnvAlts(gym.Env):
     def _check_intrusion(self):
         ac_idx = bs.traf.id2idx(ACTOR)
         reward = 0
+        ac_alt = bs.traf.alt[ac_idx] / FL2M
         for i in range(self.num_ac-1):
             int_idx = i+1
+            int_alt = bs.traf.alt[int_idx] / FL2M
+            vert_sep = abs(ac_alt - int_alt)
             _, int_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
-            if int_dis < INTRUSION_DISTANCE:
+            if int_dis < INTRUSION_DISTANCE and vert_sep < INTRUSION_ALTITUDE:
                 self.total_intrusions += 1
                 reward += INTRUSION_PENALTY
         
@@ -343,6 +411,8 @@ class SectorCREnvAlts(gym.Env):
             pygame.init()
             pygame.display.init()
             self.window = pygame.display.set_mode(self.window_size)
+            pygame.font.init()
+            self.font = pygame.font.SysFont('Arial', 14)
 
         if self.clock is None and self.render_mode == "human":
             self.clock = pygame.time.Clock()
@@ -363,6 +433,7 @@ class SectorCREnvAlts(gym.Env):
         ac_idx = bs.traf.id2idx(ACTOR)
         ac_length = 10
         ac_hdg = bs.traf.hdg[ac_idx]
+        ac_alt = int(bs.traf.alt[ac_idx])
         heading_end_x = np.cos(np.deg2rad(ac_hdg)) * ac_length
         heading_end_y = np.sin(np.deg2rad(ac_hdg)) * ac_length
         ac_qdr, ac_dis = bs.tools.geo.kwikqdrdist(CENTER[0], CENTER[1], bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
@@ -388,6 +459,9 @@ class SectorCREnvAlts(gym.Env):
                 ((x_pos)+heading_end_x,(y_pos)-heading_end_y),
                 width = 1
         )
+        
+        alt_text = self.font.render(f"FL{ac_alt // 100}", True, (0, 0, 0))
+        canvas.blit(alt_text, (x_pos + 5, y_pos - 20))
 
         # Draw intruders
         ac_length = 3
@@ -395,6 +469,7 @@ class SectorCREnvAlts(gym.Env):
         for i in range(self.num_ac-1):
             int_idx = i+1
             int_hdg = bs.traf.hdg[int_idx]
+            int_alt = int(bs.traf.alt[int_idx])
             heading_end_x = np.cos(np.deg2rad(int_hdg)) * ac_length
             heading_end_y = np.sin(np.deg2rad(int_hdg)) * ac_length
 
@@ -436,6 +511,14 @@ class SectorCREnvAlts(gym.Env):
                 radius = INTRUSION_DISTANCE*NM2KM*px_per_km,
                 width = 2
             )
+            
+            # Altitude ring
+            pygame.draw.circle(canvas, color, (x_pos, y_pos),
+                            radius=INTRUSION_DISTANCE * NM2KM * px_per_km, width=2)
+
+            # Draw intruder altitude
+            alt_text = self.font.render(f"FL{int_alt // 100}", True, color)
+            canvas.blit(alt_text, (x_pos + 5, y_pos - 20))
 
         self.window.blit(canvas, canvas.get_rect())
         pygame.display.update()

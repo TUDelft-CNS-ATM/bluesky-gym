@@ -18,15 +18,15 @@ from bluesky_gym.utils import logger
 
 bluesky_gym.register_envs()
 
-env_name = 'DescentEnv-v0'
-algorithm = SAC
+env_name = 'SectorCREnv-v1'
+algorithm = PPO
 
 # Initialize logger
 log_dir = f'./logs/{env_name}/'
 file_name = f'{env_name}_{str(algorithm.__name__)}.csv'
 csv_logger_callback = logger.CSVLoggerCallback(log_dir, file_name)
 
-TRAIN = True
+TRAIN = False
 EVAL_EPISODES = 10
 
 
@@ -41,7 +41,8 @@ if __name__ == "__main__":
     env.close()
     
     # Test the trained model
-    model = algorithm.load(f"models/{env_name}/{env_name}_{str(algorithm.__name__)}/model", env=env)
+    # model = algorithm.load(f"models/{env_name}/{env_name}_{str(algorithm.__name__)}/model", env=env)
+    model = algorithm.load("/Users/scottpena/Documents/GitHub/bluesky-gym-altitude-variation/model_altitude_test_ppo_sector.zip")
     env = gym.make(env_name, render_mode="human")
     for i in range(EVAL_EPISODES):
 
