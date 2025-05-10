@@ -29,11 +29,11 @@ if TRAIN:
     model.learn(total_timesteps=2e6, progress_bar=True, callback=checkpoint_callback)
     model.save("ddpg_model_sector_final")
 else:
-    model = DDPG.load("checkpoints/ddpg_model_1500000_steps.zip", env=env) 
+    model = DDPG.load("models/model_altitude_test_ddpg_sector.zip", env=env) 
 
 obs, info = env.reset()
 done = truncated = False
-while not (done):
+while not (done or truncated):
     action, _state = model.predict(obs, deterministic=True)
     obs, reward, done, truncated, info = env.step(action)
 

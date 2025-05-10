@@ -29,7 +29,7 @@ if TRAIN:
     model.learn(total_timesteps=2e6, progress_bar=True, callback=checkpoint_callback)
     model.save("ppo_mode_static_final")
 else:
-    model = DDPG.load("checkpoints/ppo_model_1800000_steps.zip", env=env) 
+    model = PPO.load("models/model_altitude_test_ppo_static.zip", env=env) 
 
 obs, info = env.reset()
 done = truncated = False
