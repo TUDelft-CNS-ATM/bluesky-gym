@@ -405,13 +405,16 @@ class SectorCREnvAlts(gym.Env):
                 reward += INTRUSION_PENALTY
         
         return reward
-        
+    
+    def render(self):
+        return self._render_frame()
+    
     def _render_frame(self):
+        pygame.font.init()
         if self.window is None and self.render_mode == "human":
             pygame.init()
             pygame.display.init()
             self.window = pygame.display.set_mode(self.window_size)
-            pygame.font.init()
             self.font = pygame.font.SysFont('Arial', 14)
 
         if self.clock is None and self.render_mode == "human":
@@ -519,10 +522,16 @@ class SectorCREnvAlts(gym.Env):
             # Draw intruder altitude
             alt_text = self.font.render(f"FL{int_alt // 100}", True, color)
             canvas.blit(alt_text, (x_pos + 5, y_pos - 20))
+        if self.render_mode == "human":
+            self.window.blit(canvas, canvas.get_rect())
+            pygame.display.update()
+            self.clock.tick(self.metadata["render_fps"])
 
-        self.window.blit(canvas, canvas.get_rect())
-        pygame.display.update()
-        self.clock.tick(self.metadata["render_fps"])
+        elif self.render_mode == "rgb_array":
+            # Return NumPy array from canvas
+            return pygame.surfarray.pixels3d(canvas).swapaxes(0, 1).copy()
+
+        
     
     def close(self):
         pass

@@ -24,7 +24,7 @@ bluesky_gym.register_envs()
 env = gym.make('StaticObstacleEnv-v1', render_mode='rgb_array')
 
 # model = DDPG.load("./model.zip", env=env) 
-model = PPO.load("checkpoints/ppo_model_1800000_steps.zip", env=env) 
+model = DDPG.load("checkpoints/ddpg_model_400000_steps.zip", env=env) 
 
 
 video_folder = "./videos/"
@@ -34,7 +34,7 @@ env = RecordVideo(env, video_folder, episode_trigger=lambda e: True)
 
 obs, info = env.reset()
 done = truncated = False
-while not (done):
+while not (done or truncated):
     action, _state = model.predict(obs, deterministic=True) # Your agent code here
     obs, reward, done, truncated, info = env.step(action)
 
