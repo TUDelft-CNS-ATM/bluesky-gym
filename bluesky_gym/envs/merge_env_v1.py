@@ -42,8 +42,8 @@ INTRUSION_DISTANCE = 4 # NM
 SPAWN_DISTANCE_MIN = 50
 SPAWN_DISTANCE_MAX = 200
 
-INTRUDER_DISTANCE_MIN = 20
-INTRUDER_DISTANCE_MAX = 500
+INTRUDER_DISTANCE_MIN = 500
+INTRUDER_DISTANCE_MAX = 700
 
 D_HEADING = 3 #15
 D_SPEED = 4 #20 
@@ -59,25 +59,22 @@ NUM_AC = 20
 NUM_AC_STATE = 5
 NUM_WAYPOINTS = 1
 
-RWY_LAT = 52.36239301495972
-RWY_LON = 4.713195734579777
 
-distance_faf_rwy = 200 # NM
-bearing_faf_rwy = 0
-FIX_LAT, FIX_LON = fn.get_point_at_distance(RWY_LAT, RWY_LON, distance_faf_rwy, bearing_faf_rwy)
+TARGET_LAT = 52.36239301495972
+TARGET_LON = 4.713195734579777
 
 class MergeEnvMulti(ParallelEnv):
     """ 
     Multi-agent arrival manager environment - all aircraft are required to merge into a single traffic stream.
     """
     metadata = {
-        "name": "merge_v0",
+        "name": "merge_v1",
         "render_modes": ["rgb_array","human"],
          "render_fps": 120}
 
-    def __init__(self, render_mode=None, n_agents=10, time_limit=500):
-        self.window_width = 750
-        self.window_height = 500
+    def __init__(self, render_mode=None, n_agents=10, time_limit=600):
+        self.window_width = 1500
+        self.window_height = 1000
         self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
 
         self.n_agents = n_agents
@@ -87,8 +84,8 @@ class MergeEnvMulti(ParallelEnv):
         self.time_limit = time_limit
         self.steps = 0
 
-        self.observation_spaces = {agent: gym.spaces.Box(low=-np.inf, high=np.inf, shape=(5+7*NUM_AC_STATE,), dtype=np.float64) for agent in self.agents}
-        self.action_spaces = {agent: gym.spaces.Box(-1, 1, shape=(2,), dtype=np.float64) for agent in self.agents}
+        self.observation_spaces = {agent: gym.spaces.Box(low=-np.inf, high=np.inf, shape=(4+7*NUM_AC_STATE,), dtype=np.float64) for agent in self.agents}
+        self.action_spaces = {agent: gym.spaces.Box(-1, 1, shape=(1,), dtype=np.float64) for agent in self.agents}
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -103,23 +100,18 @@ class MergeEnvMulti(ParallelEnv):
         self.num_episodes = 0
         self.average_drift = np.array([])
         self.total_intrusions = 0
-        self.faf_reached = 0
 
         self.window = None
         self.clock = None
         self.nac = NUM_AC
-        self.wpt_reach = {a: 0 for a in self.agents}
-        self.wpt_lat = FIX_LAT
-        self.wpt_lon = FIX_LON
-        self.rwy_lat = RWY_LAT
-        self.rwy_lon = RWY_LON
+        self.target_lat = TARGET_LAT
+        self.target_lon = TARGET_LON
 
     def reset(self, seed=None, options=None):
         
         bs.traf.reset()
         self.steps = 0
         self.agents = self.possible_agents[:]
-        self.wpt_reach = {a: 0 for a in self.agents}
 
         self.num_episodes += 1
         if self.num_episodes > 1:
@@ -130,7 +122,6 @@ class MergeEnvMulti(ParallelEnv):
         self.total_reward = 0
         self.average_drift = np.array([])
         self.total_intrusions = 0
-        self.faf_reached = 0
 
         self._gen_aircraft()
 
@@ -143,7 +134,7 @@ class MergeEnvMulti(ParallelEnv):
         return observations, infos
     
     def step(self, actions):
-        
+
         self._get_action(actions)
 
         for i in range(ACTION_FREQUENCY):
@@ -152,9 +143,10 @@ class MergeEnvMulti(ParallelEnv):
                 observations = self._get_observation()
                 self._render_frame()
 
+
         rewards, dones = self._get_reward()
         observations = self._get_observation()
-        
+
         if self.time_limit < self.steps:
             time_exceeded = True
         else:
@@ -169,8 +161,8 @@ class MergeEnvMulti(ParallelEnv):
 
         self.steps += 1
 
-        # important step to reset the agents, mandatory by pettingzoo API
         if any(dones.values()) or all(truncates.values()):
+            dones = {a: True for a in self.agents}
             self.agents = []
 
         return observations, rewards, dones, truncates, infos
@@ -189,20 +181,25 @@ class MergeEnvMulti(ParallelEnv):
         return [f'kl00{i+1}'.upper() for i in range(n_agents)]
     
     def _gen_aircraft(self):
-        for agent, idx in zip(self.agents,np.arange(self.n_agents)):
-            bearing_to_pos = random.uniform(-D_HEADING, D_HEADING) # heading radial towards FAF
-            distance_to_pos = random.uniform(INTRUDER_DISTANCE_MIN,INTRUDER_DISTANCE_MAX) # distance to faf 
-            lat_ac, lon_ac = fn.get_point_at_distance(self.wpt_lat, self.wpt_lon, distance_to_pos, bearing_to_pos)
-
-            bs.traf.cre(agent,actype="A320",acspd=AC_SPD,aclat=lat_ac,aclon=lon_ac,achdg=bearing_to_pos-180,acalt=10000)
-            bs.stack.stack(f"{agent} addwpt {FIX_LAT} {FIX_LON}")
-            bs.stack.stack(f"{agent} dest {RWY_LAT} {RWY_LON}")
+        # Agenten spawnen am rechten Rand (gleiche x-Position), aber y (Breitengrad) ist zufällig
+        for agent, idx in zip(self.agents, np.arange(self.n_agents)):
+            spawn_dist = random.uniform(INTRUDER_DISTANCE_MIN, INTRUDER_DISTANCE_MAX)
+            spawn_angle = 0  # Richtung Osten (rechter Rand)
+            # Basisposition am rechten Rand
+            base_lat, base_lon = fn.get_point_at_distance(self.target_lat, self.target_lon, spawn_dist, spawn_angle)
+            lat_ac = base_lat 
+            lon_ac = base_lon + random.uniform(-8, 8)
+            heading = 180.0 
+            speed = random.uniform(100, 300)
+            bs.traf.cre(agent, actype="A320", acspd=speed, aclat=lat_ac, aclon=lon_ac, achdg=heading, acalt=10000)
+            bs.stack.stack(f"{agent} addwpt {self.target_lat} {self.target_lon}")
+            bs.stack.stack(f"{agent} dest {self.target_lat} {self.target_lon}")
         bs.stack.stack('reso off')
         return
 
     def _get_observation(self):
         obs = []
-        self.waypoint_dist = {a: 0 for a in self.agents}
+        self.target_dist = {a: 0 for a in self.agents}
 
         for agent in self.agents:
             ac_idx = bs.traf.id2idx(agent)
@@ -221,10 +218,7 @@ class MergeEnvMulti(ParallelEnv):
             ac_hdg = bs.traf.hdg[ac_idx]
             
             # Get and decompose agent aircaft drift
-            if self.wpt_reach[agent] == 0: # pre-faf check
-                wpt_qdr, wpt_dist  = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.wpt_lat, self.wpt_lon)
-            else: # post-faf check
-                wpt_qdr, wpt_dist  = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.rwy_lat, self.rwy_lon)
+            wpt_qdr, wpt_dist  = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.target_lat, self.target_lon)
 
             drift = ac_hdg - wpt_qdr
             drift = fn.bound_angle_positive_negative_180(drift)
@@ -232,7 +226,7 @@ class MergeEnvMulti(ParallelEnv):
             cos_drift = np.append(cos_drift, np.cos(np.deg2rad(drift)))
             sin_drift = np.append(sin_drift, np.sin(np.deg2rad(drift)))
 
-            self.waypoint_dist[agent] = wpt_dist
+            self.target_dist[agent] = wpt_dist
 
             airspeed = np.append(airspeed, bs.traf.tas[ac_idx])
             vx = np.cos(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
@@ -271,7 +265,6 @@ class MergeEnvMulti(ParallelEnv):
                 "sin(drift)": np.array(sin_drift),
                 "airspeed": np.array(airspeed-150)/6,
                 "waypoint_dist": np.array([wpt_dist/250]),
-                "faf_reached": np.array([self.wpt_reach[agent]]),
                 "x_r": np.array(x_r[:NUM_AC_STATE]/1000000),
                 "y_r": np.array(y_r[:NUM_AC_STATE]/1000000),
                 "vx_r": np.array(vx_r[:NUM_AC_STATE]/150),
@@ -300,7 +293,6 @@ class MergeEnvMulti(ParallelEnv):
         }
 
     def _get_reward(self):
-        # TODO: have to check if setting all dones to True does not mess up the TD error
         rew = []
         dones = []
         for agent in self.agents:
@@ -320,7 +312,6 @@ class MergeEnvMulti(ParallelEnv):
             for a, r in zip(self.agents, rew)
         }
 
-        dones = [True] * len(dones) if any(dones) else dones # ensure all False or all True
         done = {
             a: d
             for a,d in zip(self.agents,dones)
@@ -330,29 +321,18 @@ class MergeEnvMulti(ParallelEnv):
         
     def _check_waypoint(self, agent):
         reward = 0
-        index = 0
         done = 0
-        if self.waypoint_dist[agent] < DISTANCE_MARGIN and self.wpt_reach[agent] != 1:
-            self.wpt_reach[agent] = 1
-            self.faf_reached = 1
-            reward += REACH_REWARD
-        elif self.waypoint_dist[agent] < 2*DISTANCE_MARGIN and self.wpt_reach[agent] == 1:
-            self.faf_reached = 2
-            done = 1 
+        # Episode endet, wenn Target erreicht ist
+        if self.target_dist[agent] < DISTANCE_MARGIN:
+            done = 1
         return reward, done
 
     def _check_drift(self, ac_idx, agent):
         ac_hdg = bs.traf.hdg[ac_idx]
-            
-        # Get and decompose agent aircaft drift
-        if self.wpt_reach[agent] == 0: # pre-faf check
-            wpt_qdr, wpt_dist  = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.wpt_lat, self.wpt_lon)
-        else: # post-faf check
-            wpt_qdr, wpt_dist  = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.rwy_lat, self.rwy_lon)
-
-        drift = ac_hdg - wpt_qdr
+        # Drift immer zum Target
+        target_qdr, target_dist  = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.target_lat, self.target_lon)
+        drift = ac_hdg - target_qdr
         drift = fn.bound_angle_positive_negative_180(drift)
-
         drift = abs(np.deg2rad(drift))
         self.average_drift = np.append(self.average_drift, drift)
         return drift * DRIFT_PENALTY
@@ -374,14 +354,8 @@ class MergeEnvMulti(ParallelEnv):
         for agent in self.agents:
             action = actions[agent]
             dh = action[0] * D_HEADING
-            dv = action[1] * D_SPEED
             heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx(agent)] + dh)
-            speed_new = (bs.traf.cas[bs.traf.id2idx(agent)] + dv)# * MpS2Kt
-
-            # print(speed_new)
             bs.stack.stack(f"HDG {agent} {heading_new}")
-            bs.traf.ap.selspdcmd(bs.traf.id2idx(agent),speed_new)
-            # bs.stack.stack(f"SPD {agent} {speed_new}")
 
     def _render_frame(self):
         if self.window is None and self.render_mode == "human":
@@ -392,13 +366,30 @@ class MergeEnvMulti(ParallelEnv):
         if self.clock is None and self.render_mode == "human":
             self.clock = pygame.time.Clock()
 
-        max_distance = 500 # width of screen in km
+        max_distance = 1000 # width of screen in km
 
         canvas = pygame.Surface(self.window_size)
         canvas.fill((135,206,235)) 
 
-        circle_x = self.window_width/2
-        circle_y = self.window_height/2
+        # Zielpunkt: Target-Position im ersten linken Viertel
+        # Mapping: Lat/Lon aus der Simulation werden auf Fensterkoordinaten gemappt
+        # Referenzpunkt ist das Ziel, das im linken Viertel angezeigt wird
+        target_x = self.window_width * 0.25
+        target_y = self.window_height * 0.5
+        circle_x = target_x
+        circle_y = target_y
+
+        # Hilfsfunktion: Wandelt Lat/Lon in Fensterkoordinaten um
+        def latlon_to_screen(lat, lon):
+            # Berechne Distanz und Richtung vom Ziel
+            qdr, dist = bs.tools.geo.kwikqdrdist(self.target_lat, self.target_lon, lat, lon)
+            # Umrechnung in km
+            rel_x = np.cos(np.deg2rad(qdr)) * dist * NM2KM
+            rel_y = np.sin(np.deg2rad(qdr)) * dist * NM2KM
+            # Mapping: max_distance km nach rechts/oben
+            x = circle_x + (rel_x / max_distance) * self.window_width * 0.75
+            y = circle_y - (rel_y / max_distance) * self.window_height * 0.75
+            return x, y
 
         pygame.draw.circle(
             canvas, 
@@ -407,7 +398,6 @@ class MergeEnvMulti(ParallelEnv):
             radius = 4,
             width = 0
         )
-        
         pygame.draw.circle(
             canvas, 
             (255,255,255),
@@ -416,59 +406,12 @@ class MergeEnvMulti(ParallelEnv):
             width = 2
         )
 
-        # draw line to faf
-        heading_length = 5000
-        heading_end_x = ((np.cos(np.deg2rad(180)) * heading_length)/max_distance)*self.window_width
-        heading_end_y = ((np.sin(np.deg2rad(180)) * heading_length)/max_distance)*self.window_width
-        pygame.draw.line(canvas,
-        (0,0,0),
-        (circle_x,circle_y),
-        (circle_x+heading_end_x/2,circle_y-heading_end_y/2),
-        width = 2
-        )
-
-        # heading boundary lines
-        he_x_l = ((np.cos(np.deg2rad(180+135)) * heading_length)/max_distance)*self.window_width
-        he_y_l = ((np.sin(np.deg2rad(180+135)) * heading_length)/max_distance)*self.window_width
-        he_x_r = ((np.cos(np.deg2rad(180-135)) * heading_length)/max_distance)*self.window_width
-        he_y_r = ((np.sin(np.deg2rad(180-135)) * heading_length)/max_distance)*self.window_width
-        pygame.draw.line(canvas,
-        (3,252,11),
-        (circle_x,circle_y),
-        (circle_x+he_x_l/2,circle_y-he_y_l/2),
-        width = 4
-        )
-        pygame.draw.line(canvas,
-        (3,252,11),
-        (circle_x,circle_y),
-        (circle_x+he_x_r/2,circle_y-he_y_r/2),
-        width = 4
-        )
-
-        # draw rwy start
-        rwy_faf_qdr, rwy_faf_dis = bs.tools.geo.kwikqdrdist(self.wpt_lat, self.wpt_lon, RWY_LAT, RWY_LON)
-        x_pos = (circle_x)+(np.cos(np.deg2rad(rwy_faf_qdr))*(rwy_faf_dis * NM2KM)/max_distance)*self.window_width
-        y_pos = (circle_y)-(np.sin(np.deg2rad(rwy_faf_qdr))*(rwy_faf_dis * NM2KM)/max_distance)*self.window_height
-        heading_length = 5000
-        heading_end_x = ((np.cos(np.deg2rad(180)) * heading_length)/max_distance)*self.window_width
-        heading_end_y = ((np.sin(np.deg2rad(180)) * heading_length)/max_distance)*self.window_width
-        pygame.draw.line(canvas,
-        (255,255,255),
-        (x_pos,y_pos),
-        (circle_x+heading_end_x/2,circle_y-heading_end_y/2),
-        width = 4
-        )
-
         # draw ownship
         for agent in self.agents:
             ac_idx = bs.traf.id2idx(agent)
             ac_length = 8
-            heading_end_x = ((np.cos(np.deg2rad(bs.traf.hdg[ac_idx])) * ac_length)/max_distance)*self.window_width
-            heading_end_y = ((np.sin(np.deg2rad(bs.traf.hdg[ac_idx])) * ac_length)/max_distance)*self.window_width
-
-            own_qdr, own_dis = bs.tools.geo.kwikqdrdist(self.wpt_lat, self.wpt_lon, bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
-            x_pos = (circle_x)+(np.cos(np.deg2rad(own_qdr))*(own_dis * NM2KM)/max_distance)*self.window_width
-            y_pos = (circle_y)-(np.sin(np.deg2rad(own_qdr))*(own_dis * NM2KM)/max_distance)*self.window_height
+            # Fensterkoordinaten aus Lat/Lon
+            x_pos, y_pos = latlon_to_screen(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
 
             separation = bs.tools.geo.kwikdist(np.concatenate((bs.traf.lat[:ac_idx], bs.traf.lat[ac_idx+1:])), 
                                                np.concatenate((bs.traf.lon[:ac_idx], bs.traf.lon[ac_idx+1:])), 
@@ -481,22 +424,29 @@ class MergeEnvMulti(ParallelEnv):
             else: 
                 color = (80,80,80)
 
+            # Heading line
+            # Berechne Endpunkt der Heading-Linie
+            heading_x, heading_y = latlon_to_screen(
+                bs.traf.lat[ac_idx] + np.cos(np.deg2rad(bs.traf.hdg[ac_idx])) * ac_length / NM2KM / 60,
+                bs.traf.lon[ac_idx] + np.sin(np.deg2rad(bs.traf.hdg[ac_idx])) * ac_length / NM2KM / 60
+            )
             pygame.draw.line(canvas,
                 (0,0,0),
                 (x_pos,y_pos),
-                ((x_pos)+heading_end_x/2,(y_pos)-heading_end_y/2),
+                (heading_x,heading_y),
                 width = 4
             )
 
-            # draw heading line
+            # draw heading line (kleiner)
             heading_length = 10
-            heading_end_x = ((np.cos(np.deg2rad(bs.traf.hdg[ac_idx])) * heading_length)/max_distance)*self.window_width
-            heading_end_y = ((np.sin(np.deg2rad(bs.traf.hdg[ac_idx])) * heading_length)/max_distance)*self.window_width
-
+            heading_x2, heading_y2 = latlon_to_screen(
+                bs.traf.lat[ac_idx] + np.cos(np.deg2rad(bs.traf.hdg[ac_idx])) * heading_length / NM2KM / 60,
+                bs.traf.lon[ac_idx] + np.sin(np.deg2rad(bs.traf.hdg[ac_idx])) * heading_length / NM2KM / 60
+            )
             pygame.draw.line(canvas,
                 (0,0,0),
                 (x_pos,y_pos),
-                ((x_pos)+heading_end_x,(y_pos)-heading_end_y),
+                (heading_x2,heading_y2),
                 width = 1
             )
 

@@ -123,7 +123,7 @@ if __name__ == "__main__":
     env_fn = bluesky_gym.envs.MergeEnvMulti
 
     # Train a model (takes ~3 minutes on GPU)
-    train_sector_supersuit(env_fn, steps=10000, seed=0)
+    train_sector_supersuit(env_fn, steps=1000, seed=0)
 
     # Evaluate 10 games (average reward should be positive but can vary significantly)
     eval_sector(env_fn, num_games=10, render_mode='human')
