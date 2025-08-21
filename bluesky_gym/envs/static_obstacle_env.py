@@ -441,5 +441,10 @@ class StaticObstacleEnv(gym.Env):
         
         self.clock.tick(self.metadata["render_fps"])
 
+        # Event-loop for MacOS to recognise window as active
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.close()
+
     def close(self):
-        pass
+        pygame.quit()
