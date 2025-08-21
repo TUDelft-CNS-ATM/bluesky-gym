@@ -44,3 +44,15 @@ def register_envs():
         entry_point="bluesky_gym.envs.merge_env:MergeEnv",
         max_episode_steps=50,
     )
+
+    register(
+        id="MergeEnv-v1",
+        entry_point="bluesky_gym.envs.merge_env_v1:MergeEnv",
+        max_episode_steps=50,
+    )
+
+    register(
+        id="SectorCREnv-v1",
+        entry_point="bluesky_gym.envs.sector_cr_env_v1:SectorCREnv",
+        max_episode_steps=200,
+    )

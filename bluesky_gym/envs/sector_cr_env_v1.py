@@ -64,7 +64,8 @@ class SectorCREnv(gym.Env):
             }
         )
 
-        self.action_space = spaces.Box(-1, 1, shape=(2,), dtype=np.float64)
+
+        self.action_space = spaces.Box(-1, 1, shape=(1,), dtype=np.float64)
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -189,32 +190,29 @@ class SectorCREnv(gym.Env):
         
     def _generate_ac(self) -> None:
         
-        # Determine bounding box of airspace
-        min_x = min(self.poly_points[:, 0])
-        min_y = min(self.poly_points[:, 1])
+        # Agent spawnt am rechten Rand mit Heading nach links (180°), zufällige Geschwindigkeit
         max_x = max(self.poly_points[:, 0])
+        min_y = min(self.poly_points[:, 1])
         max_y = max(self.poly_points[:, 1])
-        
-        init_p_latlong = []
-        
-        while len(init_p_latlong) < self.num_ac:
-            p = np.array([np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y)])
-            p = fn.nm_to_latlong(CENTER, p)
-            if bs.tools.areafilter.checkInside(self.poly_name, np.array([p[0]]), np.array([p[1]]), np.array([ALTITUDE*FL2M])):
-                init_p_latlong.append(p)
-        
+        # Agenten-Startposition: rechter Rand, zufällige y-Position
+        agent_pos_nm = np.array([max_x, np.random.uniform(min_y, max_y)])
+        agent_pos_latlong = fn.nm_to_latlong(CENTER, agent_pos_nm)
+        agent_hdg = 180.0  # Gerade nach links
+        agent_spd = np.random.uniform(120, 180)  # Zufällige Geschwindigkeit
         wpt_agent = fn.nm_to_latlong(CENTER, self.wpts[0])
-        init_pos_agent = init_p_latlong[0]
-        hdg_agent = fn.get_hdg(init_pos_agent, wpt_agent)
-        
-        # Actor AC is the only one that has ACTOR as acid
-        bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=init_pos_agent[0], aclon=init_pos_agent[1], achdg=hdg_agent, acspd=AC_SPD, acalt=ALTITUDE)
-        
-        for i in range(1, len(init_p_latlong)):
+        bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=agent_pos_latlong[0], aclon=agent_pos_latlong[1], achdg=agent_hdg, acspd=agent_spd, acalt=ALTITUDE)
+
+        # Andere Flugzeuge wie gehabt, aber zufällige Geschwindigkeit
+        for i in range(1, self.num_ac):
+            while True:
+                p_nm = np.array([np.random.uniform(min(self.poly_points[:, 0]), max_x), np.random.uniform(min_y, max_y)])
+                p_latlong = fn.nm_to_latlong(CENTER, p_nm)
+                if bs.tools.areafilter.checkInside(self.poly_name, np.array([p_latlong[0]]), np.array([p_latlong[1]]), np.array([ALTITUDE*FL2M])):
+                    break
             wpt = fn.nm_to_latlong(CENTER, self.wpts[i])
-            init_pos = init_p_latlong[i]
-            hdg = fn.get_hdg(init_pos, wpt)
-            bs.traf.cre(acid=str(i), actype=AC_TYPE, aclat=init_pos[0], aclon=init_pos[1], achdg=hdg, acspd=AC_SPD, acalt=ALTITUDE)
+            hdg = fn.get_hdg(p_latlong, wpt)
+            spd = np.random.uniform(120, 180)
+            bs.traf.cre(acid=str(i), actype=AC_TYPE, aclat=p_latlong[0], aclon=p_latlong[1], achdg=hdg, acspd=spd, acalt=ALTITUDE)
     
     def _get_info(self):
         # Here you implement any additional info that you want to log after an episode
@@ -313,13 +311,16 @@ class SectorCREnv(gym.Env):
         return observation
     
     def _get_action(self, action):
+        # Nur Heading steuerbar, Geschwindigkeit bleibt
         dh = action[0] * D_HEADING
-        dv = action[1] * D_VELOCITY
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx(ACTOR)] + dh)
-        speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt
-
+        ac_idx = bs.traf.id2idx(ACTOR)
+        wpts = fn.nm_to_latlong(CENTER, self.wpts[ac_idx])
+        ac_qdr, ac_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], wpts[0], wpts[1])
+        # Wenn Agent nahe am Zielpunkt ist, keine Steuerung mehr
+        if ac_dis < 1.0:
+            return
         bs.stack.stack(f"HDG {ACTOR} {heading_new}")
-        bs.stack.stack(f"SPD {ACTOR} {speed_new}")
 
     def _check_drift(self):
         drift = abs(np.deg2rad(self.drift))

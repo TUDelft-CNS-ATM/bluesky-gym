@@ -393,6 +393,13 @@ class HorizontalCREnv(gym.Env):
         self.window.blit(canvas, canvas.get_rect())
         pygame.display.update()
         self.clock.tick(self.metadata["render_fps"])
-        
+
+        # Event-loop for MacOS to recognise window as active
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.close()
+
     def close(self):
-        pass
+        pygame.quit()
+
+        
