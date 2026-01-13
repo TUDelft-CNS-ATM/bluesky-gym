@@ -128,9 +128,9 @@ class HorizontalCREnv(gym.Env):
     def _generate_conflicts(self, acid = 'KL001'):
         target_idx = bs.traf.id2idx(acid)
         for i in range(NUM_INTRUDERS):
-            dpsi = np.random.randint(45,315)
-            cpa = np.random.randint(0,INTRUSION_DISTANCE)
-            tlosh = np.random.randint(100,1000)
+            dpsi = self.np_random.integers(45,315)
+            cpa = self.np_random.integers(0,INTRUSION_DISTANCE)
+            tlosh = self.np_random.integers(100,1000)
             bs.traf.creconfs(acid=f'{i}',actype="A320",targetidx=target_idx,dpsi=dpsi,dcpa=cpa,tlosh=tlosh)
 
     def _generate_waypoint(self, acid = 'KL001'):
@@ -138,7 +138,7 @@ class HorizontalCREnv(gym.Env):
         self.wpt_lon = []
         self.wpt_reach = []
         for i in range(NUM_WAYPOINTS):
-            wpt_dis_init = np.random.randint(WAYPOINT_DISTANCE_MIN, WAYPOINT_DISTANCE_MAX)
+            wpt_dis_init = self.np_random.integers(WAYPOINT_DISTANCE_MIN, WAYPOINT_DISTANCE_MAX)
             wpt_hdg_init = 0
 
             ac_idx = bs.traf.id2idx(acid)

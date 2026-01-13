@@ -168,8 +168,8 @@ class DescentEnv(gym.Env):
         self.total_reward = 0
         self.final_altitude = 0
 
-        alt_init = np.random.randint(ALT_MIN, ALT_MAX)
-        self.target_alt = alt_init + np.random.randint(-TARGET_ALT_DIF,TARGET_ALT_DIF)
+        alt_init = self.np_random.integers(ALT_MIN, ALT_MAX)
+        self.target_alt = alt_init + self.np_random.integers(-TARGET_ALT_DIF,TARGET_ALT_DIF)
 
         bs.traf.cre('KL001',actype="A320",acalt=alt_init,acspd=AC_SPD)
         bs.traf.swvnav[0] = False
