@@ -223,7 +223,7 @@ class BaseEnv(gym.Env):
     
     
 
-class HasIntruders:
+class IntrudersMixin:
     """ 
     Mixin class for environments that have intruder aircraft.
     Provides common functionality for handling intruder aircraft.
@@ -269,7 +269,7 @@ class HasIntruders:
         self._init_intruders()
         super()._add_reset()
         
-class HasWaypoints:
+class WaypointsMixin:
     """ 
     Mixin class for environments that have waypoints.
     Provides common functionality for handling waypoints.
@@ -311,7 +311,7 @@ class HasWaypoints:
         self._init_waypoints()
         super()._add_reset()
 
-class HasPolygons:
+class PolygonMixin:
     """ 
     Mixin class for environments that have polygons.
     Provides common functionality for handling polygons.

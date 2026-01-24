@@ -1,4 +1,4 @@
-from bluesky_gym.envs.baseEnv import BaseEnv,HasIntruders,HasWaypoints
+from bluesky_gym.envs.baseEnv import BaseEnv,IntrudersMixin,WaypointsMixin
 import bluesky as bs
 import bluesky_gym.envs.common.functions as fn
 from bluesky_gym.envs.common.visualizer import Visualizer
@@ -12,7 +12,7 @@ import numpy as np
 
 
 
-class HorizontalCrEnv(HasWaypoints,HasIntruders,BaseEnv):
+class HorizontalCrEnv(WaypointsMixin,IntrudersMixin,BaseEnv):
     #CONFIG of the environment instead of global variables
     num_of_waypoints = 1
     waypoint_distance_min = 100
