@@ -1,7 +1,7 @@
 import gymnasium as gym
 import numpy as np
 import pygame
-from typing import ClassVar
+from typing import ClassVar,Callable
 import bluesky as bs
 from gymnasium import spaces
 from bluesky_gym.envs.common.screen_dummy import ScreenDummy
@@ -27,8 +27,8 @@ class BaseEnv(gym.Env):
         super().__init__()
         assert render_mode in (None, "human","rgb_array"), "Invalid render mode"
         self.render_mode = render_mode
-        self.under_lays = []
-        self.over_lays = []
+        self.__underlays:list[Callable] = []
+        self.__overlays:list[Callable] = []
         self.window_size = window_size
         self.window_width, self.window_height = window_size
         self.canvas = None
@@ -60,7 +60,7 @@ class BaseEnv(gym.Env):
         return action_space,observation_space
         
         
-    def _get_observation(self):
+    def _get_obs(self):
         """Get the current observation of the environment.
         This method should be overridden by subclasses to provide specific observation logic.
         """
@@ -97,7 +97,7 @@ class BaseEnv(gym.Env):
         self._init_ownship()
         self._add_reset()
         
-        observation = self._get_observation()
+        observation = self._get_obs()
         info = self._get_info()
     
         
@@ -110,7 +110,7 @@ class BaseEnv(gym.Env):
             bs.sim.step()
             if self.render_mode is "human":
                 self.render()
-        observation = self._get_observation()
+        observation = self._get_obs()
         reward = self._get_reward()
         info = self._get_info()
         terminated = self._is_terminated()
@@ -181,19 +181,35 @@ class BaseEnv(gym.Env):
         """
         raise NotImplementedError("Subclasses must implement this method.")
     
+    
+    def register_overlay(self, draw_callback: Callable[[pygame.Surface], None]):
+        """
+        Registers a function to be drawn ON TOP of the world.
+        Args:
+            draw_callback: A function that takes the pygame 'canvas' as its only argument.
+        """
+        self.__overlays.append(draw_callback)
+
+    def register_underlay(self, draw_callback: Callable[[pygame.Surface], None]):
+        """
+        Registers a function to be drawn BEHIND the world (e.g., maps, grids).
+        """
+        self.__underlays.append(draw_callback)
+    
     def _render_overlays(self):
         """ 
         Render overlays on top of the world/environment.
-        This method should be overridden by subclasses to provide specific overlay rendering logic.
         """
-        pass
-    
+        for callback in self.__overlays:
+            callback(self.canvas)
+        
     def _render_underlays(self):
         """ 
         Render underlays beneath the world/environment.
         This method should be overridden by subclasses to provide specific underlay rendering logic.
         """
-        pass
+        for callback in self.__underlays:
+            callback(self.canvas)
         
     def render(self):
         """Renders the current image or returns a rgb_array needed for gymnasium wrapper to funciton

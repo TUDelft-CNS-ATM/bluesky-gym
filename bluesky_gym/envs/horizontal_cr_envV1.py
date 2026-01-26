@@ -114,7 +114,7 @@ class HorizontalCrEnv(WaypointsMixin,IntrudersMixin,BaseEnv):
         action_space = self.action_space = spaces.Box(-1, 1, shape=(1,), dtype=np.float64)
         return action_space, observation_space
     
-    def _get_observation(self):
+    def _get_obs(self):
         ac_idx = bs.traf.id2idx(self.agent_id)
 
         self.intruder_distance = []
