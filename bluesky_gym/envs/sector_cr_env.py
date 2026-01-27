@@ -229,7 +229,7 @@ class SectorCREnv(gym.Env):
         }
         
     def _get_speed_change(self):
-        current_speed = bs.traf.cas[bs.traf.id2idx(ACTOR)]
+        current_speed = bs.traf.tas[bs.traf.id2idx(ACTOR)]
         speed_change = abs(current_speed - AC_SPD)
         # normalize between 0 and 1 e.g. for AC_SPD; AC_SPD_MAX;AC_SPD_MIN
         norm_speed_change = speed_change / (AC_SPD_MAX - AC_SPD_MIN)
@@ -280,7 +280,7 @@ class SectorCREnv(gym.Env):
         self.sin_drift = np.append(self.sin_drift, np.sin(np.deg2rad(drift)))
 
         # Get agent aircraft airspeed, m/s
-        self.airspeed = np.append(self.airspeed, bs.traf.cas[ac_idx])
+        self.airspeed = np.append(self.airspeed, bs.traf.tas[ac_idx])
 
         vx = np.cos(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
         vy = np.sin(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
@@ -330,7 +330,7 @@ class SectorCREnv(gym.Env):
         dh = action[0] * D_HEADING
         dv = action[1] * D_VELOCITY
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx(ACTOR)] + dh)
-        speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt
+        speed_new = (bs.traf.tas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt
         
         bs.stack.stack(f"HDG {ACTOR} {heading_new}")
         bs.stack.stack(f"SPD {ACTOR} {speed_new}")
