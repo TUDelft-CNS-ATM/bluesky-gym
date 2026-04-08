@@ -3,28 +3,49 @@ from __future__ import annotations
 import os
 import sys
 import textwrap
-from typing import Type, TYPE_CHECKING
+from typing import Type, TYPE_CHECKING, Dict, Tuple, Callable, Optional
 
 if TYPE_CHECKING:
     from .base_experiment import BaseExperiment
 
+CustomCommandMap = Dict[str, Tuple[Callable[[Type["BaseExperiment"]], None], str]]
 
-def _print_global_help(experiment_cls: "Type[BaseExperiment]") -> None:
-    """Prints a clean, top-level CLI menu (bypassing argparse clutter)."""
+def _print_global_help(experiment_cls: "Type[BaseExperiment]", custom_commands: Optional[CustomCommandMap] = None) -> None:
+    """Prints a clean, top-level CLI menu including custom commands."""
     script_name = os.path.basename(sys.argv[0])
+    
+    # Define standard commands
+    core_commands = {
+        "train": "Train (and optionally evaluate) a new model. [default]",
+        "evaluate": "Run detailed evaluation on a saved model.",
+        "enjoy": "Watch or record a saved model.",
+        "plot": "Plot training curves or evaluation results.",
+        "compare": "Compare training metrics across multiple runs.",
+        "generate-config": "Generate a default config.yaml for this experiment.",
+    }
+
+    # Build the command list string
+    max_len = max(len(c) for c in list(core_commands.keys()) + list((custom_commands or {}).keys()))
+    
+    cmd_help = ""
+
+    # Add core commands
+    for cmd, desc in core_commands.items():
+        cmd_help += f"      {cmd:<{max_len}}  {desc}\n"
+    
+    # Add custom commands if they exist
+    if custom_commands:
+        cmd_help += "\n    Custom Commands:\n"
+        for cmd, (fn, desc) in custom_commands.items():
+            cmd_help += f"      {cmd:<{max_len}}  {desc}\n"
+
     help_text = f"""\
     Usage: python {script_name} <command> [options]
 
     CLI for {experiment_cls.__name__}.
 
     Commands:
-      train            Train (and optionally evaluate) a new model. [default]
-      evaluate         Run detailed evaluation on a saved model.
-      enjoy            Watch or record a saved model.
-      plot             Plot training curves or evaluation results.
-      compare          Compare training metrics across multiple runs.
-      generate-config  Generate a default config.yaml for this experiment.
-
+        {cmd_help}
     Type 'python {script_name} <command> --help' for details on a specific command.
     """
     print(textwrap.dedent(help_text))
@@ -72,45 +93,52 @@ def run_generate_config_cli(experiment_cls: Type[BaseExperiment]) -> None:
         
     print(f"✅ Default config saved to {os.path.join(target_dir, args.filename)}")
 
-def run_experiment(experiment_cls: "Type[BaseExperiment]") -> None:
-    """Single entry point for the CLI."""
+def run_experiment(
+    experiment_cls: "Type[BaseExperiment]", 
+    custom_commands: Optional[CustomCommandMap] = None
+) -> None:
+    """Single entry point for the CLI with support for custom commands."""
     from .evaluate import run_evaluate_cli
     from .enjoy import run_enjoy_cli
     from .plot import run_plot_cli
     from .compare_runs import run_compare_cli
     from .train import run_train_cli
 
-    known_commands = {"train", "evaluate", "enjoy", "generate-config", "plot", "compare"}
+    # Build the dispatch map
+    dispatch_map = {
+        "train": run_train_cli,
+        "evaluate": run_evaluate_cli,
+        "enjoy": run_enjoy_cli,
+        "plot": run_plot_cli,
+        "compare": run_compare_cli,
+        "generate-config": run_generate_config_cli,
+    }
     
-    # ── 1. Find the Command ──────────────────────────────────────────────
+    # Merge custom commands into the dispatch map
+    if custom_commands:
+        for name, (fn, _) in custom_commands.items():
+            dispatch_map[name] = fn
+
+    known_commands = set(dispatch_map.keys())
+    
+    # Find the Command
     command = None
     for arg in sys.argv[1:]:
         if arg in known_commands:
             command = arg
             break
 
-    # ── 2. Global Help Intercept ─────────────────────────────────────────
+    # Global Help Intercept
     if command is None and any(arg in ["-h", "--help"] for arg in sys.argv):
-        _print_global_help(experiment_cls)
+        _print_global_help(experiment_cls, custom_commands)
         sys.exit(0)
 
-    # ── 3. Sub-script Dispatch ───────────────────────────────────────────
-    dispatch_map = {
-        "train":           run_train_cli,
-        "evaluate":        run_evaluate_cli,
-        "enjoy":           run_enjoy_cli,
-        "plot":            run_plot_cli,
-        "compare":         run_compare_cli,
-        "generate-config": run_generate_config_cli,
-    }
-
-    # Default to 'train' if nothing is specified
+    # Default to 'train'
     if command is None:
         command = "train"
 
     if command in dispatch_map:
         return _reparse_and_run(dispatch_map[command], experiment_cls, command)
-
 
 # ---------------------------------------------------------------------------
 # Helpers

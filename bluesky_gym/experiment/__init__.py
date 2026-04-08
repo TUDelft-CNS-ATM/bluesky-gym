@@ -17,6 +17,10 @@ Import surface
       SessionConfig,
       ExperimentConfig,
 
+      # Registry extension point
+      BaseRegistry,
+      register_command,
+
       # Evaluation extension point
       MetricExtractor,
 
@@ -61,6 +65,7 @@ from .plot            import (
     plot_eval_episodes,
     plot
 )
+from .registry        import BaseRegistry, register_command
 
 __all__ = [
     "run_experiment",
@@ -84,4 +89,6 @@ __all__ = [
     "plot_training_curves",
     "plot_eval_summary",
     "plot_eval_episodes",
+    "BaseRegistry",
+    "register_command",
 ]

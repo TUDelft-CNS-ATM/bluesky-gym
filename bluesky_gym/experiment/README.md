@@ -14,6 +14,7 @@ This system automates the "boilerplate" of RL: managing configurations, logging 
 When you run experiments, the framework organises artifacts automatically:
 ```text
 ./experiments/
+├── registry.csv                    # Global metadata log (Optional)
 └── <EnvName>/
     └── <AlgorithmName>/
         ├── logs/
@@ -128,22 +129,22 @@ python main.py train \
 Once you have a `run-id` (generated automatically during training), you can analyse the results:
 ```bash
 # Detailed evaluation (generates summary table and CSV)
-python main.py evaluate --run-id 20231027_120000 --episodes 100
+python main.py evaluate --run-id 20260301_120000 --episodes 100
 
 # Watch the agent play
-python main.py enjoy --run-id 20231027_120000
+python main.py enjoy --run-id 20260301_120000
 
 # Record video of the agent
-python main.py enjoy --run-id 20231027_120000 --record
+python main.py enjoy --run-id 20260301_120000 --record
 ```
 
 ### Plotting & Comparisons
 ```bash
 # Plot training reward for a run
-python main.py plot training --run-id 20231027_120000
+python main.py plot training --run-id 20260301_120000
 
 # Compare multiple runs side-by-side
-python main.py compare --runs 20231027_120000 20231027_150000
+python main.py compare --runs 20260301_120000 20260301_150000
 ```
 
 ### Pro Tip: Configuration Files
@@ -204,3 +205,52 @@ Once registered in your code, you can trigger it just like a built-in one:
 ```bash
 python main.py train --session-callbacks my_custom_cb checkpoint
 ```
+
+## 5. Optional: The Experiment Registry
+The Registry is an optional metadata layer. Use it when you want a persistent CSV log of all your runs to track things like "Intent," "Priority," or qualitative "Quality" scores.
+
+### Example: Biscuit Quality Tracker
+
+If you are training an agent to bake biscuits, you might want to track different flour types and the resulting crunchiness.
+
+**Step 1: Define your Registry**
+```python
+from bluesky_gym.experiment.registry import BaseRegistry, register_command
+
+class BiscuitRegistry(BaseRegistry):
+    @property
+    def headers(self):
+        # These columns automatically become flags for the 'add' command
+        return ["run_id", "timestamp", "flour_type", "is_good", "crunch_score"]
+
+    @register_command("Label the bake result", status={"choices": ["delicious", "burnt", "soggy"]})
+    def label(self, run_id: str, status: str):
+        icons = {"delicious": "🍪", "burnt": "🔥", "soggy": "💧"}
+        self.update_run(run_id, {"is_good": icons.get(status, status)})
+```
+
+**Step 2: Swap the Runner**
+
+Instead of using runner.run_experiment, use your registry instance to launch:
+```python
+if __name__ == "__main__":
+    registry = BiscuitRegistry()
+    # This replaces the standard runner.run_experiment()
+    registry.run_experiment(MyExperiment)
+```
+
+**Step 3: CLI Usage**
+
+The registry commands are now merged into your script:
+```bash
+# Register a new run with custom metadata
+python main.py registry add 20260301_120000 --flour-type "Whole Wheat"
+
+# Use your custom 'label' command with restricted choices
+python main.py registry label 20260301_120000 delicious
+
+# List all tracked experiments in a table
+python main.py registry list
+```
+
+The registry is completely separate from the training logic, it’s just a smart way to manage your `registry.csv` file without leaving the terminal.
