@@ -7,6 +7,7 @@ This system automates the "boilerplate" of RL: managing configurations, logging 
 * **Hierarchical Configs**: Separate control over the Session (timesteps, callbacks), the Model (hyperparameters, algorithms) and the Environment (gym kwargs).
 * **Unified Entry Point**: One script handles training, evaluation, plotting and video recording.
 * **Custom Metric Extraction**: Easily pull and aggregate domain-specific data from environment `info` dicts.
+* **Benchmarking Suite**: Built-in tools to compare convergence speed, stability and sample efficiency across multiple runs.
 
 ---
 
@@ -30,7 +31,7 @@ When you run experiments, the framework organises artifacts automatically:
 ---
 ## 2. Implementing a New Experiment
 
-To plug your environment into the framework, you only need to define one file (e.g., `experiment.py`) containing three configuration classes and one experiment class.
+To plug your environment into the framework, you only need to define one file (e.g., `my_experiment.py`) containing three configuration classes and one experiment class.
 
 ### Step 1: Define Configurations
 Subclass the base configs to add your specific hyperparameters.
@@ -66,8 +67,9 @@ class MyEnvConfig(EnvConfig):
 ```
 
 ### Step 2: Create the Experiment Class
+Inherit from `BaseExperiment` to link your configs and define how the environment and model are built.
 ```python
-from bluesky_gym.experiment import BaseExperiment, MetricExtractor
+from bluesky_gym.experiment import BaseExperiment
 
 class MyExperiment(BaseExperiment):
     model_config_cls = MyModelConfig
@@ -80,17 +82,8 @@ class MyExperiment(BaseExperiment):
 
     def make_model(self, env):
         mcfg = self.cfg.model
-        return mcfg.algorithm("MultiInputPolicy", env, verbose=1, learning_rate=mcfg.learning_rate)
-
-    @classmethod
-    def metric_extractor(cls) -> MetricExtractor:
-        # Define how to pull custom data from the environment info dict
-        return MetricExtractor(
-            extractors={
-                "distance_error": lambda info, ok: info.get("dist", 0.0),
-            },
-            display=["distance_error"]
-        )
+        algo_cls = mcfg.get_algorithm()
+        return algo_cls("MultiInputPolicy", env, verbose=1, learning_rate=mcfg.learning_rate)
 ```
 
 ### Step 3: Create the Entry Point
@@ -107,9 +100,30 @@ if __name__ == "__main__":
 ```
 ---
 
-## 3. Command Line Usage
+## 3. Command Line Interface (CLI)
 
 Now that your `main.py` is set up, you can interact with your experiment using the following commands. The framework automatically generates flags based on your dataclass fields using the format `--{section}-{field_name}`.
+
+### Automatic Flag Generation
+The framework automatically maps your dataclass fields to CLI arguments using a prefix convention:
+
+* **Session**: `--session-<field>` (e.g., `--session-total-timesteps 100000`)
+
+* **Model**: `--model-<field>` (e.g., `--model-learning-rate 0.001`)
+
+* **Env**: `--env-<field>` (e.g., `--env-wind-speed 10.0`)
+
+**Booleans**: For a field named use_skipping, the framework generates both `--session-use-skipping` and `--session-no-use-skipping`.
+
+### Quick Reference Table
+| **Command**  | **Purpose**                                   | **Key Flag**                     |
+|----------|-------------------------------------------|------------------------------|
+| `train`    | Start or resume training                  | `--run-id` (to resume/overwrite) |
+| `evaluate` | Run detailed performance metrics          | `--episodes`                   |
+| `enjoy`    | Visual playback or video recording        | `--record`                     |
+| `plot`     | Generate charts (training or eval)        | `--smooth `                    |
+| `compare`  | Benchmark multiple runs                   | `--full` (detailed table)      |
+| `registry` | Manage global experiment metadata         | `add`, `list`, `label`             |
 
 ### Training
 Start training using the default settings or override them via the CLI:
@@ -165,46 +179,71 @@ python main.py train --config my_config.yaml --session-total-timesteps 2000000
 ```
 ---
 
-## 4. Advanced: Callbacks
-You can enable built-in callbacks via the CLI:
-* `--session-callbacks checkpoint` : Saves the model periodically.
-* `--session-callbacks eval` : Evaluates the model on a separate environment during training.
-* `--session-callbacks csv_logger` : Saves training logs to a CSV.
+## 4. God Mode
+The defaults will get you off the ground, but these features allow you to reach into the training loop, rewrite the rules and perform deep forensics on your agents.
 
-Example:
-```bash
-python main.py train --session-callbacks checkpoint eval csv_logger
+### A. Telemetry (Custom Metrics)
+
+By default, the framework tracks reward and success. To track domain-specific data (e.g., fuel consumption), override the `metric_extractor`. This pulls "hidden" data from the environment's `info` dictionary that the agent might not even see.
+
+```python
+from bluesky_gym.experiment import MetricExtractor
+
+@classmethod
+def metric_extractor(cls):
+    return MetricExtractor(
+        extractors={
+            "fuel_used": lambda info, succ: info.get("fuel", 0),
+            "dist_to_target": lambda info, succ: info.get("dist", 999)
+        },
+        display=["fuel_used", "dist_to_target"]
+    )
 ```
 
-### Defining Your Own Callbacks
+### B. Brain Surgery (The Callback System)
+You can inject custom logic directly into the agent's "thinking" process using the callback registry.
 
-You can add custom logic to the training loop by registering a new callback class. Your class should implement a from_config class method to handle its own initialisation from the experiment settings.
+* **Built-in Plugins**: Toggle these via CLI:
 
+    * `checkpoint`: Don't lose progress; save the model every *N* steps.
+
+    * `eval`: Force the agent to take a "test" in a separate env periodically.
+
+    * `csv_logger`: For those who prefer spreadsheets over Tensorboard.
+
+* **Custom Probes**: Register your own logic:
 ```python
 from bluesky_gym.experiment.callbacks import callback_registry, BaseCallback
 
-@callback_registry.register("my_custom_cb")
+@callback_registry.register("my_callback")
 class MyCustomCallback(BaseCallback):
-    def __init__(self):
-        pass
-
     @classmethod
     def from_config(cls, cfg, **kwargs):
-        # Access any config value to initialise your callback
         return cls(verbose=cfg.model.verbose)
 
     def _on_step(self) -> bool:
-        # Your custom logic here
+        # Do something every single timestep
         return True
 ```
+*Usage*: `python main.py train --session-callbacks checkpoint my_callback`
 
-### Usage
+### C. Forensics (Compare & Plot)
+The framework includes a laboratory for scientifically comparing different "lives" of your agents.
 
-Once registered in your code, you can trigger it just like a built-in one:
+* **The `compare` Command**: Generates a brutal benchmarking table. It calculates **Sample Efficiency** (how fast it learned), **Convergence** (when it "got it") and **Stability** (if it started vibrating/regressing at the end).
 
-```bash
-python main.py train --session-callbacks my_custom_cb checkpoint
-```
+* **Multi-Mode Plotting Engine**: The plot API is modular, allowing you to extract insights using a variety of lenses:
+
+    1) `training`: The "standard" view of reward over time.
+    2) `eval-summary`: A high-level leaderboard for different experiment groups.
+    3) `eval-episodes`: A microscopic view of exactly what happened, step-by-step, in a single run.
+    4) `eval-dashboard`: A comprehensive, auto-configuring visual summary of a single run.
+
+        * **Adaptive Layout**: Automatically scales between 2 and 3 columns to accommodate as many metrics as your `MetricExtractor` provides.
+
+        * **Smart Validation**: Cross-references CSV logs with YAML summaries to ensure only "official" aggregated metrics are plotted, filtering out noise or internal indices.
+
+        * **Visual Depth**: Combines violin plots for distributions, success rate benchmarks, and temporal timelines in a single view.
 
 ## 5. Optional: The Experiment Registry
 The Registry is an optional metadata layer. Use it when you want a persistent CSV log of all your runs to track things like "Intent," "Priority," or qualitative "Quality" scores.

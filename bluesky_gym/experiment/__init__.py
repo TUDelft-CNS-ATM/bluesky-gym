@@ -60,10 +60,12 @@ from .enjoy           import run_enjoy_cli, enjoy
 from .compare_runs    import run_compare_cli, compare
 from .plot            import (
     run_plot_cli, 
+    plot,
     plot_training_curves,
+    plot_comparison_grid,
     plot_eval_summary, 
     plot_eval_episodes,
-    plot
+    plot_eval_dashboard
 )
 from .registry        import BaseRegistry, register_command
 
@@ -87,8 +89,10 @@ __all__ = [
     "run_compare_cli",
     "run_plot_cli",
     "plot_training_curves",
+    "plot_comparison_grid",
     "plot_eval_summary",
     "plot_eval_episodes",
+    "plot_eval_dashboard",
     "BaseRegistry",
     "register_command",
 ]

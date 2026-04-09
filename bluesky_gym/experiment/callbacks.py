@@ -156,6 +156,7 @@ class StandardEval(EvalCallback):
         return cls(
             eval_env=eval_env,
             log_path=cfg.log_dir,
+            n_eval_episodes=cfg.session.eval_episodes,
             eval_freq=cfg.session.eval_freq,
             best_model_save_path=cfg.save_path,
             deterministic=True,
@@ -175,6 +176,7 @@ class TrainingEvalLogger(EvalCallback):
         return cls(
             eval_env=eval_env,
             log_path=cfg.log_dir,
+            n_eval_episodes=cfg.session.eval_episodes,
             eval_freq=cfg.session.eval_freq,
             best_model_save_path=cfg.save_path,
             deterministic=True,

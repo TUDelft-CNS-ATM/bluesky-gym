@@ -1,7 +1,16 @@
 """
 bluesky_gym/experiment/evaluate.py
-------------------------------------
-Generic evaluation script for any trained SB3 + GoalEnv model.
+----------------------------------
+Evaluation suite for testing trained models across multiple episodes.
+
+Classes
+-------
+  MetricExtractor - Defines how to pull custom data from the environment info dict.
+
+Functions
+---------
+  evaluate()      - Runs the evaluation loop and collects metrics.
+  aggregate_metrics() - Computes mean/std across episodes and groups.
 """
 
 from __future__ import annotations

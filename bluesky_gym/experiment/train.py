@@ -1,7 +1,12 @@
 """
 bluesky_gym/experiment/train.py
-------------------------------------
-Core training logic and CLI wrapper.
+-------------------------------
+Logic for initialising environments and executing the SB3 training loop.
+
+Functions
+---------
+  train()        - Programmatic entry point; instantiates the experiment class.
+  run_train_cli() - CLI parser for hyper-parameters and session settings.
 """
 
 from __future__ import annotations
@@ -16,7 +21,7 @@ def train(
     experiment_cls: Type[BaseExperiment],
     cfg: "ExperimentConfig"
 ) -> None:
-    """Programmatic entry point to initialize and run an experiment."""
+    """Programmatic entry point to initialise and run an experiment."""
     experiment_cls(cfg).run()
 
 def run_train_cli(experiment_cls: Type[BaseExperiment]) -> None:

@@ -1,3 +1,22 @@
+"""
+bluesky_gym/experiment/runner.py
+-------------------------------
+The central entry point (CLI Dispatcher) for all bluesky-gym experiments.
+
+Structure
+---------
+  run_experiment() - Main dispatcher. Determines which sub-command is being
+                     called (train, evaluate, etc.) and hands off to the sub-CLI.
+  
+Commands
+--------
+  train     - Launch or resume training.
+  evaluate  - Run performance metrics on a saved model.
+  enjoy     - Visual playback/recording of a trained agent.
+  plot      - Generate matplotlib charts from results.
+  compare   - Compare multiple runs in a single table.
+"""
+
 from __future__ import annotations
 
 import os
@@ -16,7 +35,7 @@ def _print_global_help(experiment_cls: "Type[BaseExperiment]", custom_commands: 
     
     # Define standard commands
     core_commands = {
-        "train": "Train (and optionally evaluate) a new model. [default]",
+        "train": "Train (and optionally evaluate) a new model.",
         "evaluate": "Run detailed evaluation on a saved model.",
         "enjoy": "Watch or record a saved model.",
         "plot": "Plot training curves or evaluation results.",
@@ -35,7 +54,6 @@ def _print_global_help(experiment_cls: "Type[BaseExperiment]", custom_commands: 
     
     # Add custom commands if they exist
     if custom_commands:
-        cmd_help += "\n    Custom Commands:\n"
         for cmd, (fn, desc) in custom_commands.items():
             cmd_help += f"      {cmd:<{max_len}}  {desc}\n"
 
@@ -45,7 +63,7 @@ def _print_global_help(experiment_cls: "Type[BaseExperiment]", custom_commands: 
     CLI for {experiment_cls.__name__}.
 
     Commands:
-        {cmd_help}
+{cmd_help}
     Type 'python {script_name} <command> --help' for details on a specific command.
     """
     print(textwrap.dedent(help_text))
@@ -133,9 +151,10 @@ def run_experiment(
         _print_global_help(experiment_cls, custom_commands)
         sys.exit(0)
 
-    # Default to 'train'
     if command is None:
-        command = "train"
+        given_command = sys.argv[1]
+        error_message = f"Unknown command: {given_command}" if given_command else "No command given"
+        raise ValueError(error_message)
 
     if command in dispatch_map:
         return _reparse_and_run(dispatch_map[command], experiment_cls, command)

@@ -1,3 +1,18 @@
+"""
+bluesky_gym/experiment/registry.py
+----------------------------------
+Persistent CSV-based storage for tracking experiment runs and metadata.
+
+Classes
+-------
+  BaseRegistry - Abstract handler for reading/writing run metadata to disk.
+
+Usage
+-----
+  Inherit from BaseRegistry and define the 'headers' property to create
+  a project-specific registry (e.g., to track flight success, wind speeds, etc).
+"""
+
 import os
 import csv
 import abc
@@ -5,11 +20,13 @@ import sys
 import argparse
 import inspect
 from datetime import datetime
-from typing import List, Dict, Any, Type, Optional, TYPE_CHECKING
+from typing import List, Dict, Any, Type, Optional, TYPE_CHECKING, Tuple, Callable
 
 if TYPE_CHECKING:
     from .base_experiment import BaseExperiment
     from .runner import CustomCommandMap
+
+CustomCommandMap = Dict[str, Tuple[Callable[[Type["BaseExperiment"]], None], str]]
 
 def register_command(help_text: Optional[str] = None, **arg_configs):
     """
@@ -77,12 +94,12 @@ class BaseRegistry(abc.ABC):
         parser = argparse.ArgumentParser(prog="registry", formatter_class=argparse.RawTextHelpFormatter)
         subparsers = parser.add_subparsers(dest="subcmd", required=True)
 
-        # Collect all methods marked with @register_command
-        cmds = {name: method for name, method in inspect.getmembers(self, predicate=inspect.ismethod) 
+        # Collect all methods marked with @register_command, keyed by their CLI name (hyphenated)
+        # so registration and lookup always use the same key with no conversion needed.
+        cmds = {name.replace("_", "-"): method for name, method in inspect.getmembers(self, predicate=inspect.ismethod) 
                 if hasattr(method, "_is_command")}
 
-        for name, fn in cmds.items():
-            command_name = name.replace("_", "-")
+        for command_name, fn in cmds.items():
             sub = subparsers.add_parser(command_name, help=getattr(fn, "_command_help", "No description provided."))
             
             sig = inspect.signature(fn)
@@ -114,8 +131,12 @@ class BaseRegistry(abc.ABC):
                 sub.add_argument(arg_name, **kwargs)
 
         # Parse starting from the registry sub-command
-        args = parser.parse_args(sys.argv[2:])
-        cmd_fn = cmds[args.subcmd.replace("-", "_")]
+        # The outer runner (runner.py _reparse_and_run) already stripped the
+        # 'registry' token from sys.argv before calling us, so what remains is:
+        #   sys.argv = ['main.py', 'add', '20260407_153017', ...]
+        # Parse from index 1 — everything after the script name.
+        args = parser.parse_args(sys.argv[1:])
+        cmd_fn = cmds[args.subcmd]
         
         # Prepare function arguments
         func_args = vars(args).copy()
@@ -132,11 +153,20 @@ class BaseRegistry(abc.ABC):
 
     @register_command("Add a new experiment run. Extra headers can be passed as --header-name.")
     def add(self, run_id: str, **kwargs):
+        #TODO: find a better way to handle **kwargs becuase it's a bit hacky especially for the timestamp
+
+        if any(r.get(self.run_id) == run_id for r in self._read_all()):
+            print(f"❌ Error: Run ID '{run_id}' already exists.")
+            return
+
         row = {h: "" for h in self.headers}
         row[self.run_id] = run_id
-        
+
         if self.timestamp in self.headers:
             row[self.timestamp] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        kwargs.pop(self.run_id, None)
+        kwargs.pop(self.timestamp, None)
 
         for key, value in kwargs.items():
             clean_key = key.replace("-", "_")
@@ -149,14 +179,17 @@ class BaseRegistry(abc.ABC):
     @register_command("List all experiments in the registry.")
     def list(self):
         rows = self._read_all()
-        if not rows: 
+        if not rows:
             return print("Registry is empty.")
-        
-        # Dynamic column sizing for a clean terminal output
-        print(f"\n{'RUN ID':<20} | {'GOOD':<4} | {'INTENT'}")
-        print("-" * 75)
+
+        # Generic fallback: prints all columns. Subclasses should override for
+        # domain-specific formatting (column selection, widths, etc.).
+        col_w = 20
+        header_row = " | ".join(f"{h.upper():<{col_w}}" for h in self.headers)
+        print(f"\n{header_row}")
+        print("-" * len(header_row))
         for r in rows:
-            print(f"{r.get('run_id',''):<20} | {r.get('is_good',''):<4} | {r.get('intent','')}")
+            print(" | ".join(f"{r.get(h, ''):<{col_w}}" for h in self.headers))
         print()
 
     @register_command("Delete a run from the registry.")

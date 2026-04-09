@@ -175,6 +175,8 @@ class BaseExperiment(abc.ABC):
                 raise ValueError("make_model() returned None!")
 
         callbacks = self.get_callbacks(eval_env)
+
+        cfg.save()
  
         print(f"\n🏋️  Training for {cfg.session.total_timesteps:,} steps …")
         model.learn(
@@ -184,7 +186,6 @@ class BaseExperiment(abc.ABC):
         )
  
         model.save(f"{cfg.save_path}/final_model")
-        cfg.save()
         print(f"✅ Training complete.  Model saved → {cfg.save_path}")
  
         train_env.close()
