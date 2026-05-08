@@ -1,0 +1,364 @@
+import gymnasium as gym
+import numpy as np
+import pygame
+from typing import ClassVar,Callable
+import bluesky as bs
+from gymnasium import spaces
+from bluesky_gym.envs.common.screen_dummy import ScreenDummy
+from bluesky_gym.envs.common.types import Waypoint
+
+class BaseEnv(gym.Env):
+    """ 
+    Base environment class for BlueSky Gym environments.
+    All BlueSky Gym environments should inherit from this class.
+    """
+    # Define class variables which are common to all environments
+    action_frequency: ClassVar[int] = 10  # Frequency of actions for the bluesky simulator
+    sim_speed: ClassVar[int] = 1  # Simulation speed for the bluesky simulator
+    agent_speed: ClassVar[int] = 150  # Default aircraft speed in knots
+    agent_id: ClassVar[str] = "KL001"  # Default aircraft ID for the own ship
+
+    metadata = {
+        "render_modes": ["human", "rgb_array"],
+        "render_fps": 100,
+    }
+
+    def __init__(self,window_size=(800, 600),render_mode=None,workdir=None):
+        super().__init__()
+        assert render_mode in (None, "human","rgb_array"), "Invalid render mode"
+        self.render_mode = render_mode
+        self.__underlays:list[Callable] = []
+        self.__overlays:list[Callable] = []
+        self.window_size = window_size
+        self.window_width, self.window_height = window_size
+        self.canvas = None
+        self.own_ship_idx = None
+        self.episode_init = []
+        self.total_reward = 0
+        self.action_space,self.observation_space = self._init_action_observation_spaces()
+        # initialize bluesky as non-networked simulation node
+        if bs.sim is None:
+            bs.init(mode='sim', detached=True,workdir=workdir)
+            
+        # Initialize dummy screen and set correct simulation speed
+        bs.src = ScreenDummy()
+        bs.stack.stack(f"DT {self.sim_speed};FF")
+        
+        self.window = None
+        self.clock = None
+        
+        
+        
+    def _init_action_observation_spaces(self)->tuple[spaces.Box,spaces.Dict]:
+        """Initialize the action and observation spaces for the environment.
+        This method should be overridden by subclasses to provide specific action and observation spaces.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+        #Example:
+        action_space = TODO
+        observation_space = TODO
+        return action_space,observation_space
+        
+        
+    def _get_obs(self):
+        """Get the current observation of the environment.
+        This method should be overridden by subclasses to provide specific observation logic.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+        
+    def _init_own_ship(self):
+        """Initialize the own ship in the environment.
+        This method should be overridden by subclasses to provide specific own ship initialization logic.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+    
+    def _reset_instance_variables(self):
+        """Reset instance variables for a new episode.
+        This method should be overridden by subclasses to provide specific reset logic.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+    
+    def _get_info(self):
+        """Get additional info about the current state of the environment.
+        This method should be overridden by subclasses to provide specific info logic.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+        
+    def reset(self,seed=None,options=None):
+        """Reset the environment to an initial state and return an initial observation.
+
+        Args:
+            seed (int, optional): Seed for random number generator. Defaults to None.
+            options (dict, optional): Additional options for resetting the environment. Defaults to None.
+        """
+        bs.traf.reset()
+        self._reset_instance_variables()
+        super().reset(seed=seed,options=options)
+        self._init_ownship()
+        self._add_reset()
+        
+        observation = self._get_obs()
+        info = self._get_info()
+    
+        
+        
+        return observation, info
+    
+    def step(self,action):
+        self._get_action(action) # Applies the action to the bluesky simulator
+        for i in range(self.action_frequency):
+            bs.sim.step()
+            if self.render_mode is "human":
+                self.render()
+        observation = self._get_obs()
+        reward = self._get_reward()
+        info = self._get_info()
+        terminated = self._is_terminated()
+        truncated = self._is_truncated()
+        return observation, reward, terminated, truncated, info
+    
+    def _add_reset(self):
+        """Additional reset logic specific to the environment.
+        This method can be overridden by subclasses to provide specific additional reset logic.
+        Do not call super() since this is the base model and end of the init chain.
+        """
+        pass
+    
+    def _get_action(self,action):
+        """Apply the given action to the environment.
+        This method should be overridden by subclasses to provide specific action logic.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+        
+        
+    def _get_reward(self):
+        """Calculate the reward for the current step.
+        This method should be overridden by subclasses to provide specific reward logic.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+    
+    def _is_terminated(self):
+        """Function to check if the episode is terminated.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+    
+    def _is_truncated(self):
+        """Function to check if the episode is truncated.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+    
+    def _init_ownship(self):
+        """Initialize ownship of the environment.
+        This method should be overridden by subclasses to provide specific ownship logic.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+        
+    def _begin_frame(self):
+        """ 
+        
+        """
+        if self.window is None and self.render_mode == "human":
+            pygame.init()
+            pygame.display.init()
+            self.window = pygame.display.set_mode(self.window_size)
+
+        if self.clock is None and self.render_mode == "human":
+            self.clock = pygame.time.Clock()
+            
+        #clear events 
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.close()
+            
+        self.canvas = pygame.Surface(self.window_size)
+        self.canvas.fill((135,206,235))
+
+    
+    def _render_world(self):
+        """ 
+        Render the world/environment.
+        This method should be overridden by subclasses to provide specific world rendering logic.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+    
+    
+    def register_overlay(self, draw_callback: Callable[[pygame.Surface], None]):
+        """
+        Registers a function to be drawn ON TOP of the world.
+        Args:
+            draw_callback: A function that takes the pygame 'canvas' as its only argument.
+        """
+        self.__overlays.append(draw_callback)
+
+    def register_underlay(self, draw_callback: Callable[[pygame.Surface], None]):
+        """
+        Registers a function to be drawn BEHIND the world (e.g., maps, grids).
+        """
+        self.__underlays.append(draw_callback)
+    
+    def _render_overlays(self):
+        """ 
+        Render overlays on top of the world/environment.
+        """
+        for callback in self.__overlays:
+            callback(self.canvas)
+        
+    def _render_underlays(self):
+        """ 
+        Render underlays beneath the world/environment.
+        This method should be overridden by subclasses to provide specific underlay rendering logic.
+        """
+        for callback in self.__underlays:
+            callback(self.canvas)
+        
+    def render(self):
+        """Renders the current image or returns a rgb_array needed for gymnasium wrapper to funciton
+        """
+        self._begin_frame()
+        self._render_underlays()
+        self._render_world()
+        self._render_overlays()
+        
+        if self.render_mode == "human":
+            self.window.blit(self.canvas, (0, 0))
+            pygame.display.flip()
+            self.clock.tick(self.metadata["render_fps"])
+        elif self.render_mode == "rgb_array":
+            return np.array(pygame.surfarray.pixels3d(self.canvas).swapaxes(0, 1))
+        
+    
+    def _projection_transform_to_x_y_distance(self,lat,lon,altitude)->tuple[int,int,float]:
+        """Convert the position of the bluesky simulator to x and y cooridnates and return the distance from ownship
+
+        Args:
+            lat (float): latitude of the aircraft
+            lon (float): longitude of the aircraft
+            altitude (float): altitude of the aircraft
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+    
+    
+
+class IntrudersMixin:
+    """ 
+    Mixin class for environments that have intruder aircraft.
+    Provides common functionality for handling intruder aircraft.
+    """
+    
+    num_intruders: ClassVar[int] = 5  # Default number of intruder aircraft
+    intruder_speed: ClassVar[int] = 150  # Default speed of intruder aircraft in knots
+    intrusion_distance: ClassVar[int] = 5  # Default intrusion distance in nautical miles
+    intrusion_penalty: ClassVar[float] = -1.0  # Penalty for intrusion
+    
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.total_intrusions = 0
+    
+    def _init_intruders(self):
+        for i in range(1,self.num_intruders+1):
+            self._spawn_intruder(i,self.intruder_speed,self.intrusion_distance)
+            
+    def _check_horizontal_intrusion(self):
+        ac_idx = bs.traf.id2idx(self.agent_id)
+        reward = 0
+        for i in range(1,self.num_intruders+1):
+            _, int_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[i], bs.traf.lon[i])
+            if int_dis < self.intrusion_distance:
+                self.total_intrusions += 1
+                reward += self.intrusion_penalty
+        
+        return reward
+    
+        
+    def _spawn_intruder(self,index:int,intruder_speed:int,intrusion_distance:int):
+        """Spawn an intruder aircraft in the environment.
+
+        Args:
+            index (int): Index of the intruder aircraft.
+            intruder_speed (int): Speed of the intruder aircraft in knots.
+            intrusion_distance (int): Intrusion distance in nautical miles.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+        
+    
+    def _add_reset(self):
+        self._init_intruders()
+        super()._add_reset()
+        
+class WaypointsMixin:
+    """ 
+    Mixin class for environments that have waypoints.
+    Provides common functionality for handling waypoints.
+    Adds: 
+    
+        self.waypoints: list[Waypoint]
+        class variable: number_of_waypoints int
+    """
+    num_of_waypoints: ClassVar[int] = 1 # Default number of waypoints
+    distance_margin: ClassVar[int] = 5  # Default distance margin for waypoints in lm
+    reach_reward: ClassVar[float] = 1.0  # Default reward for reaching a waypoint
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.waypoints: list[Waypoint] = []
+        
+    def _check_waypoint(self)->float:
+        reward = 0
+        for waypoint in self.waypoints:
+            if waypoint.distance < self.distance_margin and waypoint.reach == 0:
+                waypoint.reach = 1
+                reward += self.reach_reward
+        return reward
+    
+    def _init_waypoints(self):
+        """Initialize waypoints in the environment.
+        """
+        for i in range(self.num_of_waypoints):
+            print("Creating waypoint ", i)
+            self.waypoints.append(self._create_waypoint())
+    
+    def _create_waypoint(self)->Waypoint:
+        """Create a waypoint in the environment.
+        This method should be overridden by subclasses to provide specific waypoint creation logic.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+    
+    def _add_reset(self):
+        self.waypoints = []
+        self._init_waypoints()
+        super()._add_reset()
+
+class PolygonMixin:
+    """ 
+    Mixin class for environments that have polygons.
+    Provides common functionality for handling polygons.
+    """
+    
+    number_of_polygons: ClassVar[int] = 1  # Default number of polygons
+    
+    def _init_polygons(self):
+        """Initialize polygons in the environment.
+        This method should be overridden by subclasses to provide specific polygon initialization logic.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+    
+    def _add_reset(self):
+        self._init_polygons()
+        super()._add_reset()
+        
+class HasAirport:
+    """ 
+    Mixin class for environments that have airports.
+    Provides common functionality for handling airports.
+    """
+    
+    def _init_airports(self):
+        """Initialize airports in the environment.
+        This method should be overridden by subclasses to provide specific airport initialization logic.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+    
+    def _add_reset(self):
+        self._init_airports()
+        super()._add_reset()
+
+
