@@ -17,6 +17,8 @@ ALTITUDE = 350 # In FL
 
 # Aircraft parameters
 AC_SPD = 150
+AC_SPD_MIN = 72
+AC_SPD_MAX = 180
 AC_TYPE = "A320"
 ACTOR = "KL001"
 
@@ -31,6 +33,7 @@ INTRUSION_DISTANCE = 5 # NM
 ACTION_FREQUENCY = 5
 NUM_AC_STATE = 4
 DRIFT_PENALTY = -0.1
+SPEED_PENALTY = -0.1
 INTRUSION_PENALTY = -1
 D_HEADING = 22.5 # deg
 D_VELOCITY = 20/3 # kts
@@ -222,13 +225,23 @@ class SectorCREnv(gym.Env):
             'total_intrusions': self.total_intrusions,
             'average_drift': self.average_drift.mean()
         }
+        
+    def _get_speed_change(self):
+        current_speed = bs.traf.tas[bs.traf.id2idx(ACTOR)]
+        speed_change = abs(current_speed - AC_SPD)
+        # normalize between 0 and 1 e.g. for AC_SPD; AC_SPD_MAX;AC_SPD_MIN
+        norm_speed_change = speed_change / (AC_SPD_MAX - AC_SPD_MIN)
+        return norm_speed_change * SPEED_PENALTY
+        
+        
     
     def _get_reward(self):
         
         drift_reward = self._check_drift()
         intrusion_reward = self._check_intrusion()
+        speed_reward = self._get_speed_change()
 
-        total_reward = drift_reward + intrusion_reward
+        total_reward = drift_reward + intrusion_reward + speed_reward
         self.total_reward += total_reward
 
         return total_reward
@@ -299,7 +312,7 @@ class SectorCREnv(gym.Env):
         observation = {
             "cos(drift)": self.cos_drift,
             "sin(drift)": self.sin_drift,
-            "airspeed": (self.airspeed-150)/6,
+            "airspeed": (self.airspeed-AC_SPD)/D_VELOCITY,
             "x_r": self.x_r[:NUM_AC_STATE]/13000,
             "y_r": self.y_r[:NUM_AC_STATE]/13000,
             "vx_r": self.vx_r[:NUM_AC_STATE]/32,
@@ -315,10 +328,12 @@ class SectorCREnv(gym.Env):
         dh = action[0] * D_HEADING
         dv = action[1] * D_VELOCITY
         heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx(ACTOR)] + dh)
-        speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt
-
+        speed_new = (bs.traf.tas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt
+        
         bs.stack.stack(f"HDG {ACTOR} {heading_new}")
         bs.stack.stack(f"SPD {ACTOR} {speed_new}")
+        
+
 
     def _check_drift(self):
         drift = abs(np.deg2rad(self.drift))
