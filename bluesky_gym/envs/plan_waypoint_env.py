@@ -147,7 +147,7 @@ class PlanWaypointEnv(gym.Env):
     def _get_action(self,action):
 
         # Transform action to the change in heading
-        # action = np.random.randint(-100,100)/100
+        # action = self.np_random.integers(-100,100)/100
         action = self.ac_hdg + action * D_HEADING
 
         bs.stack.stack(f"HDG KL001 {action[0]}")
@@ -201,8 +201,8 @@ class PlanWaypointEnv(gym.Env):
         self.wpt_lon = []
         self.wpt_reach = []
         for i in range(NUM_WAYPOINTS):
-            wpt_dis_init = np.random.randint(WAYPOINT_DISTANCE_MIN, WAYPOINT_DISTANCE_MAX)
-            wpt_hdg_init = np.random.randint(0, 359)
+            wpt_dis_init = self.np_random.integers(WAYPOINT_DISTANCE_MIN, WAYPOINT_DISTANCE_MAX)
+            wpt_hdg_init = self.np_random.integers(0, 359)
 
             ac_idx = bs.traf.id2idx(acid)
 

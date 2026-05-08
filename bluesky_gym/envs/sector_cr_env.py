@@ -95,10 +95,10 @@ class SectorCREnv(gym.Env):
         self._generate_polygon() # Create airspace polygon
         
         if self.density_mode == "normal":
-            rand_density = np.random.normal(AC_DENSITY_MU, AC_DENSITY_SIGMA)
+            rand_density = self.np_random.normal(AC_DENSITY_MU, AC_DENSITY_SIGMA)
             self.num_ac = int(max(np.ceil(rand_density * self.poly_area), NUM_AC_STATE+1)) # Get total number of AC in the airspace including agent (min = 3)
         else:
-            rand_density = np.random.uniform(*AC_DENSITY_RANGE)
+            rand_density = self.np_random.uniform(*AC_DENSITY_RANGE)
             self.num_ac = int(max(np.ceil(rand_density * self.poly_area), NUM_AC_STATE+1)) # Get total number of AC in the airspace including agent (min = 3)
         
         self._generate_waypoints() # Create waypoints for aircraft
@@ -140,12 +140,12 @@ class SectorCREnv(gym.Env):
     def _generate_polygon(self):
         
         R = np.sqrt(POLY_AREA_RANGE[1] / np.pi)
-        p = [fn.random_point_on_circle(R) for _ in range(3)] # 3 random points to start building the polygon
+        p = [fn.random_point_on_circle(R,self.np_random) for _ in range(3)] # 3 random points to start building the polygon
         p = fn.sort_points_clockwise(p)
         p_area = fn.polygon_area(p)
         
         while p_area < POLY_AREA_RANGE[0]:
-            p.append(fn.random_point_on_circle(R))
+            p.append(fn.random_point_on_circle(R,self.np_random))
             p = fn.sort_points_clockwise(p)
             p_area = fn.polygon_area(p)
         
@@ -170,7 +170,7 @@ class SectorCREnv(gym.Env):
             edges.append((p1, p2, len_edge))
             perim_tot += len_edge
         
-        d_list = [np.random.uniform(0, perim_tot) for _ in range(self.num_ac)] # Each ac including agent is given a waypoint
+        d_list = [self.np_random.uniform(0, perim_tot) for _ in range(self.num_ac)] # Each ac including agent is given a waypoint
         d_list.sort()
         
         self.wpts = [] # In terms of NM
@@ -197,7 +197,7 @@ class SectorCREnv(gym.Env):
         init_p_latlong = []
         
         while len(init_p_latlong) < self.num_ac:
-            p = np.array([np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y)])
+            p = np.array([self.np_random.uniform(min_x, max_x), self.np_random.uniform(min_y, max_y)])
             p = fn.nm_to_latlong(CENTER, p)
             if bs.tools.areafilter.checkInside(self.poly_name, np.array([p[0]]), np.array([p[1]]), np.array([ALTITUDE*FL2M])):
                 init_p_latlong.append(p)

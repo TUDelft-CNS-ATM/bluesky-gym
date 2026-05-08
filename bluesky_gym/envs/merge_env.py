@@ -111,8 +111,8 @@ class MergeEnv(gym.Env):
         self.faf_reached = 0
 
         # ownship spawn location
-        bearing_to_pos = random.uniform(-D_HEADING, D_HEADING) # heading radial towards FAF
-        distance_to_pos = random.uniform(SPAWN_DISTANCE_MIN,SPAWN_DISTANCE_MAX)  # distance to faf 
+        bearing_to_pos = self.np_random.uniform(-D_HEADING, D_HEADING) # heading radial towards FAF
+        distance_to_pos = self.np_random.uniform(SPAWN_DISTANCE_MIN,SPAWN_DISTANCE_MAX)  # distance to faf 
         rlat, rlon = fn.get_point_at_distance(FIX_LAT, FIX_LON, distance_to_pos, bearing_to_pos)
 
         bs.traf.cre('KL001',actype="A320",acspd=AC_SPD, aclat= rlat, aclon= rlon, achdg=bearing_to_pos-180,acalt=10000)
@@ -146,8 +146,8 @@ class MergeEnv(gym.Env):
     
     def _gen_aircraft(self):
         for i in range(NUM_AC-1):
-            bearing_to_pos = random.uniform(-D_HEADING, D_HEADING) # heading radial towards FAF
-            distance_to_pos = random.uniform(INTRUDER_DISTANCE_MIN,INTRUDER_DISTANCE_MAX) # distance to faf 
+            bearing_to_pos = self.np_random.uniform(-D_HEADING, D_HEADING) # heading radial towards FAF
+            distance_to_pos = self.np_random.uniform(INTRUDER_DISTANCE_MIN,INTRUDER_DISTANCE_MAX) # distance to faf 
             lat_ac, lon_ac = fn.get_point_at_distance(self.wpt_lat, self.wpt_lon, distance_to_pos, bearing_to_pos)
 
             bs.traf.cre(f'INT{i}',actype="A320",acspd=AC_SPD,aclat=lat_ac,aclon=lon_ac,achdg=bearing_to_pos-180,acalt=10000)

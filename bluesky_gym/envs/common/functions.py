@@ -1,5 +1,7 @@
 import numpy as np
 from typing import List
+import numpy as np
+
 
 def bound_angle_positive_negative_180(angle_deg: float) -> float:
     """ maps any angle in degrees to the [-180,180] interval 
@@ -41,7 +43,7 @@ def get_point_at_distance(lat1, lon1, d, bearing, R=6371):
     )
     return np.degrees(lat2), np.degrees(lon2)
 
-def random_point_on_circle(radius: float) -> np.array:
+def random_point_on_circle(radius: float,generator: np.random.Generator) -> np.array:
     """ Get a random point on a circle circumference with given radius
     Parameters
     __________
@@ -53,7 +55,7 @@ def random_point_on_circle(radius: float) -> np.array:
     point: np.array
         randomly sampled point
     """
-    alpha = 2 * np.pi * np.random.uniform(0., 1.)
+    alpha = 2 * np.pi * generator.uniform(0., 1.)
     x = radius * np.cos(alpha)
     y = radius * np.sin(alpha)
     return np.array([x, y])
