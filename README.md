@@ -28,6 +28,7 @@ a single-agent and a multi-agent environment.
 
 ## Submission & logistics
 
+- **Registration** Fill in this [form](https://docs.google.com/forms/d/e/1FAIpQLSf1fAvrqL4DiNEgy2Q2FqvpXCvjDhMMJ4fvAJTnOo0YH-SRQw/viewform?usp=publish-editor)
 - **Deadline:** 30th of November 2026
 - **How to submit:** Submit a technical report including metrics and video(s) of the trained policy to the email below, your latest submission will be graded
 - **Team size:** No limit
