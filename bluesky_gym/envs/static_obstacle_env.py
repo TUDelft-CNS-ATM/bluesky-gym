@@ -1,11 +1,16 @@
 import numpy as np
-import pygame
-
 import bluesky as bs
 import bluesky_gym.envs.common.functions as fn
 
 import gymnasium as gym
 from gymnasium import spaces
+
+from core.observations import WaypointObservation, ObstacleObservation
+from core.rendering import (
+    PygameCanvas, TopDownProjection,
+    draw_aircraft, draw_waypoint, draw_polygon, RED_ORANGE,
+)
+from core.actions import HeadingAction, SpeedAction, combine_action_spaces
 
 DISTANCE_MARGIN = 5 # km
 
@@ -28,7 +33,6 @@ AC_SPD = 150 # kts
 ALTITUDE = 350 # In FL
 
 NM2KM = 1.852
-MpS2Kt = 1.94384
 
 ACTION_FREQUENCY = 10
 
@@ -55,20 +59,20 @@ class StaticObstacleEnv(gym.Env):
         self.window_height = 512 # pixels
         self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
 
-        self.observation_space = spaces.Dict(
-            {   
-                "destination_waypoint_distance": spaces.Box(-np.inf, np.inf, shape = (1,), dtype=np.float64),
-                "destination_waypoint_cos_drift": spaces.Box(-np.inf, np.inf, shape = (1,), dtype=np.float64),
-                "destination_waypoint_sin_drift": spaces.Box(-np.inf, np.inf, shape = (1,), dtype=np.float64),
-                "restricted_area_radius": spaces.Box(0, 1, shape = (NUM_OBSTACLES,), dtype=np.float64),
-                "restricted_area_distance": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES, ), dtype=np.float64),
-                "cos_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64),
-                "sin_difference_restricted_area_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_OBSTACLES,), dtype=np.float64)
+        max_obstacle_radius = np.sqrt(OBSTACLE_AREA_RANGE[1] / np.pi)
+        self.waypoint_obs = WaypointObservation(n=NUM_WAYPOINTS, distance_norm=WAYPOINT_DISTANCE_MAX)
+        self.obstacle_obs = ObstacleObservation(n=NUM_OBSTACLES, distance_norm=WAYPOINT_DISTANCE_MAX, radius_norm=max_obstacle_radius)
 
-            }
-        )
-       
-        self.action_space = spaces.Box(-1, 1, shape=(2,), dtype=np.float64)
+        self.observation_space = spaces.Dict({
+            **self.waypoint_obs.space(),
+            **self.obstacle_obs.space(),
+        })
+
+        self.agent = "KL001"
+
+        self.heading_action = HeadingAction(d_heading=D_HEADING)
+        self.speed_action = SpeedAction(d_speed=D_SPEED)
+        self.action_space = combine_action_spaces([self.heading_action, self.speed_action])
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -88,8 +92,11 @@ class StaticObstacleEnv(gym.Env):
 
         self.obstacle_names = []
 
-        self.window = None
-        self.clock = None
+        self.pygame_canvas = PygameCanvas(self.window_width, self.window_height)
+        self.projection = TopDownProjection(
+            max_distance=MAX_DISTANCE, ref_lat=0, ref_lon=0,
+            window_size=(self.window_width, self.window_height),
+        )
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed) 
@@ -101,21 +108,14 @@ class StaticObstacleEnv(gym.Env):
         self.crashed = 0
         self.average_drift = np.array([])
 
-        bs.traf.cre('KL001',actype="A320",acspd=AC_SPD, acalt=ALTITUDE)
+        bs.traf.cre(self.agent,actype="A320",acspd=AC_SPD, acalt=ALTITUDE)
 
-        # defining screen coordinates
-        # defining the reference point as the top left corner of the SQUARE screen
-        # from the initial position of the aircraft which is set to be the centre of the screen
-        ac_idx = bs.traf.id2idx('KL001')
-        d = np.sqrt(2*(MAX_DISTANCE/2)**2) #KM
-        lat_ref_point,lon_ref_point = bs.tools.geo.kwikpos(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], 315, d/NM2KM)
-        
-        self.screen_coords = [lat_ref_point,lon_ref_point]#[52.9, 2.6]
+        ac_idx = bs.traf.id2idx(self.agent)
+        self.projection.update_ref(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
 
         self._generate_obstacles()
         self._generate_waypoint()
 
-        ac_idx = bs.traf.id2idx('KL001')
         self.initial_wpt_qdr, _ = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.wpt_lat[0], self.wpt_lon[0])
         bs.traf.hdg[ac_idx] = self.initial_wpt_qdr
         bs.traf.ap.trk[ac_idx] = self.initial_wpt_qdr
@@ -217,69 +217,32 @@ class StaticObstacleEnv(gym.Env):
         self.wpt_lon.append(wpt_lon)
         self.wpt_reach.append(0)
 
-    def _generate_coordinates_centre_obstacles(self, acid = 'KL001', num_obstacles = NUM_OBSTACLES):
+    def _generate_coordinates_centre_obstacles(self, num_obstacles = NUM_OBSTACLES):
         self.obstacle_centre_lat = []
         self.obstacle_centre_lon = []
         
         for i in range(num_obstacles):
             obstacle_dis_from_reference = np.random.randint(OBSTACLE_DISTANCE_MIN, OBSTACLE_DISTANCE_MAX)
             obstacle_hdg_from_reference = np.random.randint(0, 360)
-            ac_idx = bs.traf.id2idx(acid)
+            ac_idx = bs.traf.id2idx(self.agent)
 
             obstacle_centre_lat, obstacle_centre_lon = fn.get_point_at_distance(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], obstacle_dis_from_reference, obstacle_hdg_from_reference)    
             self.obstacle_centre_lat.append(obstacle_centre_lat)
             self.obstacle_centre_lon.append(obstacle_centre_lon)
 
     def _get_obs(self):
-        ac_idx = bs.traf.id2idx('KL001')
+        ac_idx = bs.traf.id2idx(self.agent)
 
-        self.destination_waypoint_distance = []
-        self.wpt_qdr = []
-        self.destination_waypoint_cos_drift = []
-        self.destination_waypoint_sin_drift = []
-        self.destination_waypoint_drift = []
+        # raw values retained for _check_waypoint, _check_drift (approach C)
+        wpt_qdr, wpt_dis = bs.tools.geo.kwikqdrdist(
+            bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.wpt_lat[0], self.wpt_lon[0])
+        self.destination_waypoint_distance = [wpt_dis * NM2KM]
+        self.destination_waypoint_drift = [fn.bound_angle_positive_negative_180(bs.traf.hdg[ac_idx] - wpt_qdr)]
 
-        self.obstacle_centre_distance = []
-        self.obstacle_centre_cos_bearing = []
-        self.obstacle_centre_sin_bearing = []
-            
-        self.ac_hdg = bs.traf.hdg[ac_idx]
-        self.ac_tas = bs.traf.tas[ac_idx]
-
-        wpt_qdr, wpt_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.wpt_lat[0], self.wpt_lon[0])
-    
-        self.destination_waypoint_distance.append(wpt_dis * NM2KM)
-        self.wpt_qdr.append(wpt_qdr)
-
-        drift = self.ac_hdg - wpt_qdr
-        drift = fn.bound_angle_positive_negative_180(drift)
-
-        self.destination_waypoint_drift.append(drift)
-        self.destination_waypoint_cos_drift.append(np.cos(np.deg2rad(drift)))
-        self.destination_waypoint_sin_drift.append(np.sin(np.deg2rad(drift)))
-        
-        for obs_idx in range(NUM_OBSTACLES):
-            obs_centre_qdr, obs_centre_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.obstacle_centre_lat[obs_idx], self.obstacle_centre_lon[obs_idx])
-            obs_centre_dis = obs_centre_dis * NM2KM #KM        
-
-            bearing = self.ac_hdg - obs_centre_qdr
-            bearing = fn.bound_angle_positive_negative_180(bearing)
-
-            self.obstacle_centre_distance.append(obs_centre_dis)
-            self.obstacle_centre_cos_bearing.append(np.cos(np.deg2rad(bearing)))
-            self.obstacle_centre_sin_bearing.append(np.sin(np.deg2rad(bearing)))
-
-        observation = {
-                "destination_waypoint_distance": np.array(self.destination_waypoint_distance)/WAYPOINT_DISTANCE_MAX,
-                "destination_waypoint_cos_drift": np.array(self.destination_waypoint_cos_drift),
-                "destination_waypoint_sin_drift": np.array(self.destination_waypoint_sin_drift),
-                "restricted_area_radius": np.array(self.obstacle_radius)/(OBSTACLE_AREA_RANGE[0]),
-                "restricted_area_distance": np.array(self.obstacle_centre_distance)/WAYPOINT_DISTANCE_MAX,
-                "cos_difference_restricted_area_pos": np.array(self.obstacle_centre_cos_bearing),
-                "sin_difference_restricted_area_pos": np.array(self.obstacle_centre_sin_bearing),
-            }
-
-        return observation
+        return {
+            **self.waypoint_obs.observe(self.agent, self.wpt_lat, self.wpt_lon),
+            **self.obstacle_obs.observe(self.agent, self.obstacle_centre_lat, self.obstacle_centre_lon, self.obstacle_radius),
+        }
     
     def _get_info(self):
         return {
@@ -325,7 +288,7 @@ class StaticObstacleEnv(gym.Env):
         return drift * DRIFT_PENALTY
 
     def _check_intrusion(self):
-        ac_idx = bs.traf.id2idx('KL001')
+        ac_idx = bs.traf.id2idx(self.agent)
         reward = 0
         terminate = 0
         for obs_idx in range(NUM_OBSTACLES):
@@ -335,109 +298,32 @@ class StaticObstacleEnv(gym.Env):
                 terminate = 1
         return reward, terminate
 
-    def _get_action(self,action):
-        dh = action[0] * D_HEADING
-        dv = action[1] * D_SPEED
-        heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx('KL001')] + dh)
-        speed_new = (bs.traf.cas[bs.traf.id2idx('KL001')] + dv) * MpS2Kt
-
-        bs.stack.stack(f"HDG {'KL001'} {heading_new}")
-        bs.stack.stack(f"SPD {'KL001'} {speed_new}")
+    def _get_action(self, action):
+        self.heading_action.execute(self.agent, action[0])
+        self.speed_action.execute(self.agent, action[1])
 
     def _render_frame(self):
-        if self.window is None and self.render_mode == "human":
-            pygame.init()
-            pygame.display.init()
-            self.window = pygame.display.set_mode(self.window_size)
-            
+        ac_idx = bs.traf.id2idx(self.agent)
+        canvas = self.pygame_canvas.begin_frame()
 
-        if self.clock is None and self.render_mode == "human":
-            self.clock = pygame.time.Clock()
+        # Draw ownship
+        x, y = self.projection.project(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
+        draw_aircraft(canvas, x, y, bs.traf.hdg[ac_idx],
+                      body_km=8, heading_km=50, projection=self.projection,
+                      color=RED_ORANGE, body_width=5)
 
-        screen_coords = self.screen_coords
-
-        canvas = pygame.Surface(self.window_size)
-        canvas.fill((135,206,235))
-
-        px_per_km = self.window_width/MAX_DISTANCE
-
-        # draw ownship
-        ac_idx = bs.traf.id2idx('KL001')
-        ac_length = 8
-        heading_end_x = ((np.sin(np.deg2rad(bs.traf.hdg[ac_idx])) * ac_length)/MAX_DISTANCE)*self.window_width
-        heading_end_y = ((np.cos(np.deg2rad(bs.traf.hdg[ac_idx])) * ac_length)/MAX_DISTANCE)*self.window_width
-
-        qdr, dis = bs.tools.geo.kwikqdrdist(screen_coords[0], screen_coords[1], bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
-        dis = dis*NM2KM
-        x_actor = ((np.sin(np.deg2rad(qdr))*dis)/MAX_DISTANCE)*self.window_width
-        y_actor = ((-np.cos(np.deg2rad(qdr))*dis)/MAX_DISTANCE)*self.window_width
-        pygame.draw.line(canvas,
-            (235, 52, 52),
-            (x_actor, y_actor),
-            (x_actor+heading_end_x, y_actor-heading_end_y),
-            width = 5
-        )
-
-        # draw heading line
-        heading_length = 50
-        heading_end_x = ((np.sin(np.deg2rad(bs.traf.hdg[ac_idx])) * heading_length)/MAX_DISTANCE)*self.window_width
-        heading_end_y = ((np.cos(np.deg2rad(bs.traf.hdg[ac_idx])) * heading_length)/MAX_DISTANCE)*self.window_width
-
-        pygame.draw.line(canvas,
-            (0,0,0),
-            (x_actor,y_actor),
-            (x_actor+heading_end_x, y_actor-heading_end_y),
-            width = 1
-        )
-
-        # draw obstacles
+        # Draw obstacles
         for vertices in self.obstacle_vertices:
-            points = []
-            for coord in vertices:
-                lat_ref = coord[0]
-                lon_ref = coord[1]
-                qdr, dis = bs.tools.geo.kwikqdrdist(screen_coords[0], screen_coords[1], lat_ref, lon_ref)
-                dis = dis*NM2KM
-                x_ref = (np.sin(np.deg2rad(qdr))*dis)/MAX_DISTANCE*self.window_width
-                y_ref = (-np.cos(np.deg2rad(qdr))*dis)/MAX_DISTANCE*self.window_width
-                points.append((x_ref, y_ref))
-            pygame.draw.polygon(canvas,
-                (0,0,0), points
-            )
+            points = [self.projection.project(v[0], v[1]) for v in vertices]
+            draw_polygon(canvas, points)
 
-        # draw target waypoint
-        indx = 0
-        for lat, lon, reach in zip(self.wpt_lat, self.wpt_lon, self.wpt_reach):
-            
-            indx += 1
-            qdr, dis = bs.tools.geo.kwikqdrdist(screen_coords[0], screen_coords[1], lat, lon)
+        # Draw waypoints
+        for lat, lon, reached in zip(self.wpt_lat, self.wpt_lon, self.wpt_reach):
+            wx, wy = self.projection.project(lat, lon)
+            draw_waypoint(canvas, wx, wy, DISTANCE_MARGIN, self.projection,
+                          reached=bool(reached))
 
-            circle_x = ((np.sin(np.deg2rad(qdr)) * dis * NM2KM)/MAX_DISTANCE)*self.window_width
-            circle_y = (-(np.cos(np.deg2rad(qdr)) * dis * NM2KM)/MAX_DISTANCE)*self.window_width
-
-            color = (255,255,255)
-
-            pygame.draw.circle(
-                canvas, 
-                color,
-                (circle_x,circle_y),
-                radius = 4,
-                width = 0
-            )
-            
-            pygame.draw.circle(
-                canvas, 
-                color,
-                (circle_x,circle_y),
-                radius = (DISTANCE_MARGIN/MAX_DISTANCE)*self.window_width,
-                width = 2
-            )
-
-        self.window.blit(canvas, canvas.get_rect())
-        
-        pygame.display.update()
-        
-        self.clock.tick(self.metadata["render_fps"])
+        self.pygame_canvas.end_frame(canvas)
 
     def close(self):
         bs.stack.stack('quit')

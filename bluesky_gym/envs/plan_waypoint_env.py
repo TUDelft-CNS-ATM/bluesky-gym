@@ -1,11 +1,13 @@
 import numpy as np
-import pygame
-
 import bluesky as bs
 import bluesky_gym.envs.common.functions as fn
 
 import gymnasium as gym
 from gymnasium import spaces
+
+from core.observations import WaypointObservation
+from core.rendering import PygameCanvas, TopDownProjection, draw_aircraft, draw_waypoint
+from core.actions import HeadingAction
 
 DISTANCE_MARGIN = 5 # km
 WAYPOINT_DISTANCE_MIN = 0
@@ -17,6 +19,8 @@ REACH_REWARD = 1
 AC_SPD = 150
 
 D_HEADING = 45
+
+NM2KM = 1.852
 
 ACTION_FREQUENCY = 10
 
@@ -34,6 +38,7 @@ class PlanWaypointEnv(gym.Env):
     - Clean up rendering
     - More elegant observation function
     - Speed changes (?)
+    - Run long training tests with the new observation function
     
     """
 
@@ -46,16 +51,16 @@ class PlanWaypointEnv(gym.Env):
         self.window_height = 512
         self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
 
-        self.observation_space = spaces.Dict(
-            {
-                "waypoint_distance": spaces.Box(-np.inf, np.inf, shape = (NUM_WAYPOINTS,), dtype=np.float64),
-                "cos_difference": spaces.Box(-np.inf, np.inf, shape = (NUM_WAYPOINTS,), dtype=np.float64),
-                "sin_difference": spaces.Box(-np.inf, np.inf, shape = (NUM_WAYPOINTS,), dtype=np.float64),
-                "waypoint_reached": spaces.Box(0, 1, shape = (NUM_WAYPOINTS,), dtype=np.float64)
-            }
-        )
-       
-        self.action_space = spaces.Box(-1, 1, shape=(1,), dtype=np.float64)
+        self.waypoint_obs = WaypointObservation(n=NUM_WAYPOINTS, distance_norm=WAYPOINT_DISTANCE_MAX, include_status=True)
+
+        self.observation_space = spaces.Dict({
+            **self.waypoint_obs.space(),
+        })
+
+        self.agent = "KL001"
+
+        self.heading_action = HeadingAction(d_heading=D_HEADING)
+        self.action_space = self.heading_action.space()
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -71,56 +76,29 @@ class PlanWaypointEnv(gym.Env):
         self.total_reward = 0
         self.waypoints_completed = 0
 
-        """
-        If human-rendering is used, `self.window` will be a reference
-        to the window that we draw to. `self.clock` will be a clock that is used
-        to ensure that the environment is rendered at the correct framerate in
-        human-mode. They will remain `None` until human-mode is used for the
-        first time.
-        """
-        self.window = None
-        self.clock = None
+        self.pygame_canvas = PygameCanvas(self.window_width, self.window_height)
+        self.projection = TopDownProjection(
+            max_distance=200, ref_lat=0, ref_lon=0,
+            window_size=(self.window_width, self.window_height),
+        )
 
 
     def _get_obs(self):
-        """
-        Observation consists of distance to the waypoint and heading difference with respect to the waypoint
-        in cosine and sine decomposition.
+        ac_idx = bs.traf.id2idx(self.agent)
+        self.ac_hdg = bs.traf.hdg[ac_idx]
 
-        """
-
-        NM2KM = 1.852
-        ac_idx = bs.traf.id2idx('KL001')
-
+        # raw waypoint values (generation order) retained for _check_waypoint, _render_frame (approach C)
         self.wpt_dis = []
         self.wpt_qdr = []
         self.drift = []
-        self.wpt_cos = []
-        self.wpt_sin = []
-        
         for lat, lon in zip(self.wpt_lat, self.wpt_lon):
-            
-            self.ac_hdg = bs.traf.hdg[ac_idx]
             wpt_qdr, wpt_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], lat, lon)
-        
             self.wpt_dis.append(wpt_dis * NM2KM)
             self.wpt_qdr.append(wpt_qdr)
+            self.drift.append(fn.bound_angle_positive_negative_180(self.ac_hdg - wpt_qdr))
 
-            drift = self.ac_hdg - wpt_qdr
-            drift = fn.bound_angle_positive_negative_180(drift)
-
-            self.wpt_cos.append(np.cos(np.deg2rad(drift)))
-            self.wpt_sin.append(np.sin(np.deg2rad(drift)))
-            self.drift.append(drift)
-
-        observation = {
-                "waypoint_distance": (np.array(self.wpt_reach) -1)* -1 * np.array(self.wpt_dis)/WAYPOINT_DISTANCE_MAX,
-                "cos_difference": (np.array(self.wpt_reach) -1)* -1 * np.array(self.wpt_cos),
-                "sin_difference": (np.array(self.wpt_reach) -1)* -1 * np.array(self.wpt_sin),
-                "waypoint_reached": np.array(self.wpt_reach)
-            }
-        
-        return observation
+        # waypoints are sorted by distance; waypoint_status is reordered to match (per-slot reach flag)
+        return self.waypoint_obs.observe(self.agent, self.wpt_lat, self.wpt_lon, reached_flags=self.wpt_reach)
     
     def _get_info(self):
         # Here you implement any additional info that you want to return after a step,
@@ -144,13 +122,8 @@ class PlanWaypointEnv(gym.Env):
         else:
             return reach_reward, 1
         
-    def _get_action(self,action):
-
-        # Transform action to the change in heading
-        # action = np.random.randint(-100,100)/100
-        action = self.ac_hdg + action * D_HEADING
-
-        bs.stack.stack(f"HDG KL001 {action[0]}")
+    def _get_action(self, action):
+        self.heading_action.execute(self.agent, action)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -158,7 +131,7 @@ class PlanWaypointEnv(gym.Env):
         self.total_reward = 0
         self.waypoints_completed = 0
 
-        bs.traf.cre('KL001',actype="A320",acspd=AC_SPD)
+        bs.traf.cre(self.agent,actype="A320",acspd=AC_SPD)
 
         self._generate_waypoint()
         observation = self._get_obs()
@@ -226,74 +199,19 @@ class PlanWaypointEnv(gym.Env):
         return reward
 
     def _render_frame(self):
-        if self.window is None and self.render_mode == "human":
-            pygame.init()
-            pygame.display.init()
-            self.window = pygame.display.set_mode(self.window_size)
+        ac_idx = bs.traf.id2idx(self.agent)
+        self.projection.update_ref(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
+        canvas = self.pygame_canvas.begin_frame()
 
-        if self.clock is None and self.render_mode == "human":
-            self.clock = pygame.time.Clock()
+        draw_aircraft(canvas, *self.projection.center, bs.traf.hdg[ac_idx],
+                      body_km=8, heading_km=50, projection=self.projection)
 
-        max_distance = 200 # width of screen in km
+        for lat, lon, reached in zip(self.wpt_lat, self.wpt_lon, self.wpt_reach):
+            x, y = self.projection.project(lat, lon)
+            draw_waypoint(canvas, x, y, DISTANCE_MARGIN, self.projection,
+                          reached=bool(reached))
 
-        canvas = pygame.Surface(self.window_size)
-        canvas.fill((135,206,235))
-
-        # draw ownship
-        ac_idx = bs.traf.id2idx('KL001')
-        ac_length = 8
-        heading_end_x = ((np.cos(np.deg2rad(bs.traf.hdg[ac_idx])) * ac_length)/max_distance)*self.window_width
-        heading_end_y = ((np.sin(np.deg2rad(bs.traf.hdg[ac_idx])) * ac_length)/max_distance)*self.window_width
-
-        pygame.draw.line(canvas,
-            (0,0,0),
-            (self.window_width/2,self.window_height/2),
-            ((self.window_width/2)+heading_end_x,(self.window_height/2)-heading_end_y),
-            width = 4
-        )
-
-        # draw heading line
-        heading_length = 50
-        heading_end_x = ((np.cos(np.deg2rad(bs.traf.hdg[ac_idx])) * heading_length)/max_distance)*self.window_width
-        heading_end_y = ((np.sin(np.deg2rad(bs.traf.hdg[ac_idx])) * heading_length)/max_distance)*self.window_width
-
-        pygame.draw.line(canvas,
-            (0,0,0),
-            (self.window_width/2,self.window_height/2),
-            ((self.window_width/2)+heading_end_x,(self.window_height/2)-heading_end_y),
-            width = 1
-        )
-
-        # draw target waypoint
-        for qdr, dis, reach in zip(self.wpt_qdr, self.wpt_dis, self.wpt_reach):
-
-            circle_x = ((np.cos(np.deg2rad(qdr)) * dis)/max_distance)*self.window_width
-            circle_y = ((np.sin(np.deg2rad(qdr)) * dis)/max_distance)*self.window_width
-
-            if reach:
-                color = (155,155,155)
-            else:
-                color = (255,255,255)
-
-            pygame.draw.circle(
-                canvas, 
-                color,
-                ((self.window_width/2)+circle_x,(self.window_height/2)-circle_y),
-                radius = 4,
-                width = 0
-            )
-            
-            pygame.draw.circle(
-                canvas, 
-                color,
-                ((self.window_width/2)+circle_x,(self.window_height/2)-circle_y),
-                radius = (DISTANCE_MARGIN/max_distance)*self.window_width,
-                width = 2
-            )
-
-        self.window.blit(canvas, canvas.get_rect())
-        pygame.display.update()
-        self.clock.tick(self.metadata["render_fps"])
+        self.pygame_canvas.end_frame(canvas)
         
     def close(self):
         bs.stack.stack('quit')

@@ -1,18 +1,15 @@
 import numpy as np
-import pygame
-
 import bluesky as bs
 
 import gymnasium as gym
 from gymnasium import spaces
 
-# Define constants
-ALT_MEAN = 1500
-ALT_STD = 3000
-VZ_MEAN = 0
-VZ_STD = 5
-RWY_DIS_MEAN = 100
-RWY_DIS_STD = 200
+from core.observations import OwnAltitudeObservation, TargetAltitudeObservation, RunwayDistanceObservation
+from core.rendering import (
+    PygameCanvas, SideProfileProjection,
+    draw_side_aircraft, draw_ground, draw_runway, draw_target_altitude,
+)
+from core.actions import VerticalSpeedAction
 
 ACTION_2_MS = 12.5
 
@@ -49,16 +46,20 @@ class DescentEnv(gym.Env):
         self.window_height = 256
         self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
 
-        self.observation_space = spaces.Dict(
-            {
-                "altitude": spaces.Box(-np.inf, np.inf, dtype=np.float64),
-                "vz": spaces.Box(-np.inf, np.inf, dtype=np.float64),
-                "target_altitude": spaces.Box(-np.inf, np.inf, dtype=np.float64),
-                "runway_distance": spaces.Box(-np.inf, np.inf, dtype=np.float64)
-            }
-        )
-       
-        self.action_space = spaces.Box(-1, 1, shape=(1,), dtype=np.float64)
+        self.alt_obs = OwnAltitudeObservation()
+        self.target_alt_obs = TargetAltitudeObservation()
+        self.runway_obs = RunwayDistanceObservation(rwy_lat=52, rwy_lon=4)
+
+        self.observation_space = spaces.Dict({
+            **self.alt_obs.space(),
+            **self.target_alt_obs.space(),
+            **self.runway_obs.space(),
+        })
+
+        self.agent = "KL001"
+
+        self.vertical_action = VerticalSpeedAction(vs_scale=ACTION_2_MS)
+        self.action_space = self.vertical_action.space()
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -74,46 +75,19 @@ class DescentEnv(gym.Env):
         self.total_reward = 0
         self.final_altitude = 0
 
-        """
-        If human-rendering is used, `self.window` will be a reference
-        to the window that we draw to. `self.clock` will be a clock that is used
-        to ensure that the environment is rendered at the correct framerate in
-        human-mode. They will remain `None` until human-mode is used for the
-        first time.
-        """
-        self.window = None
-        self.clock = None
+        self.pygame_canvas = PygameCanvas(self.window_width, self.window_height)
+        self.projection = SideProfileProjection(
+            max_distance=180, max_altitude=5000,
+            window_size=(self.window_width, self.window_height),
+        )
 
 
     def _get_obs(self):
-        """
-        Observation consists of altitude, vertical speed, target altitude and distance to runway
-        Very crude normalization in place for now
-        """
-
-        DEFAULT_RWY_DIS = 200 
-        RWY_LAT = 52
-        RWY_LON = 4
-        NM2KM = 1.852
-
-        self.altitude = bs.traf.alt[0]
-        self.vz = bs.traf.vs[0]
-        self.runway_distance = (DEFAULT_RWY_DIS - bs.tools.geo.kwikdist(RWY_LAT,RWY_LON,bs.traf.lat[0],bs.traf.lon[0])*NM2KM)
-
-        # very crude normalization
-        obs_altitude = np.array([(self.altitude - ALT_MEAN)/ALT_STD])
-        obs_vz = np.array([(self.vz - VZ_MEAN) / VZ_STD])
-        obs_target_alt = np.array([((self.target_alt- ALT_MEAN)/ALT_STD)])
-        obs_runway_distance = np.array([(self.runway_distance - RWY_DIS_MEAN)/RWY_DIS_STD])
-
-        observation = {
-                "altitude": obs_altitude,
-                "vz": obs_vz,
-                "target_altitude": obs_target_alt,
-                "runway_distance": obs_runway_distance,
-            }
-        
-        return observation
+        return {
+            **self.alt_obs.observe(self.agent),
+            **self.target_alt_obs.observe(self.target_alt),
+            **self.runway_obs.observe(self.agent),
+        }
     
     def _get_info(self):
         # Here you implement any additional info that you want to return after a step,
@@ -125,7 +99,10 @@ class DescentEnv(gym.Env):
         }
     
     def _get_reward(self):
-
+        self.altitude = bs.traf.alt[0]
+        self.runway_distance = (
+            200 - bs.tools.geo.kwikdist(52, 4, bs.traf.lat[0], bs.traf.lon[0]) * 1.852
+        )
         # reward part of the function
         if self.runway_distance > 0 and self.altitude > 0:
             reward = abs(self.target_alt - self.altitude) * ALT_DIF_REWARD_SCALE
@@ -142,21 +119,8 @@ class DescentEnv(gym.Env):
             self.total_reward += reward
             return reward, 1
         
-    def _get_action(self,action):
-        # Transform action to the meters per second
-        action = action * ACTION_2_MS
-
-        # Bluesky interpretes vertical velocity command through altitude commands 
-        # with a vertical speed (magnitude). So check sign of action and give arbitrary 
-        # altitude command
-
-        # The actions are then executed through stack commands;
-        if action >= 0:
-            bs.traf.selalt[0] = 1000000 # High target altitude to start climb
-            bs.traf.selvs[0] = action
-        elif action < 0:
-            bs.traf.selalt[0] = 0 # High target altitude to start descent
-            bs.traf.selvs[0] = action
+    def _get_action(self, action):
+        self.vertical_action.execute(self.agent, action)
 
     def reset(self, seed=None, options=None):
         
@@ -169,7 +133,7 @@ class DescentEnv(gym.Env):
         alt_init = np.random.randint(ALT_MIN, ALT_MAX)
         self.target_alt = alt_init + np.random.randint(-TARGET_ALT_DIF,TARGET_ALT_DIF)
 
-        bs.traf.cre('KL001',actype="A320",acalt=alt_init,acspd=AC_SPD)
+        bs.traf.cre(self.agent,actype="A320",acalt=alt_init,acspd=AC_SPD)
         bs.traf.swvnav[0] = False
 
         observation = self._get_obs()
@@ -208,70 +172,24 @@ class DescentEnv(gym.Env):
         pass
 
     def _render_frame(self):
-        if self.window is None and self.render_mode == "human":
-            pygame.init()
-            pygame.display.init()
-            self.window = pygame.display.set_mode(self.window_size)
-
-        if self.clock is None and self.render_mode == "human":
-            self.clock = pygame.time.Clock()
-
-        zero_offset = 25
-        max_distance = 180 # width of screen in km
-
-        canvas = pygame.Surface(self.window_size)
-        canvas.fill((135,206,235))
-
-        # draw a ground surface
-        pygame.draw.rect(
-            canvas, 
-            (154,205,50),
-            pygame.Rect(
-                (0,self.window_height-50),
-                (self.window_width, 50)
-                ),
+        self.altitude = bs.traf.alt[0]
+        self.runway_distance = (
+            200 - bs.tools.geo.kwikdist(52, 4, bs.traf.lat[0], bs.traf.lon[0]) * 1.852
         )
-        
-        # draw target altitude
-        max_alt = 5000
-        target_alt = int((-1*(self.target_alt-max_alt)/max_alt)*(self.window_height-50))
+        canvas = self.pygame_canvas.begin_frame()
 
-        pygame.draw.line(
-            canvas,
-            (255,255,255),
-            (0,target_alt),
-            (self.window_width,target_alt)
-        )
+        draw_ground(canvas, self.projection)
 
-        # draw runway
-        runway_length = 30
-        runway_start = int(((self.runway_distance + zero_offset)/max_distance)*self.window_width)
-        runway_end = int(runway_start + (runway_length/max_distance)*self.window_width)
+        _, target_y = self.projection.project(0, self.target_alt)
+        draw_target_altitude(canvas, target_y, self.projection)
 
-        pygame.draw.line(
-            canvas,
-            (119,136,153),
-            (runway_start,self.window_height - 50),
-            (runway_end,self.window_height - 50),
-            width = 3
-        )
+        rwy_x, rwy_y = self.projection.project(self.runway_distance, 0)
+        draw_runway(canvas, rwy_x, rwy_y, self.projection.scale_horizontal(30))
 
-        # draw aircraft
-        aircraft_alt = int((-1*(self.altitude-max_alt)/max_alt)*(self.window_height-50))
-        aircraft_start = int(((zero_offset)/max_distance)*self.window_width)
-        aircraft_end = int(aircraft_start + (4/max_distance)*self.window_width)
+        ac_x, ac_y = self.projection.project(0, self.altitude)
+        draw_side_aircraft(canvas, ac_x, ac_y, self.projection.scale_horizontal(4))
 
-        pygame.draw.line(
-            canvas,
-            (0,0,0),
-            (aircraft_start,aircraft_alt),
-            (aircraft_end,aircraft_alt),
-            width = 5
-        )
-
-        self.window.blit(canvas, canvas.get_rect())
-        pygame.display.update()
-        self.clock.tick(self.metadata["render_fps"])
+        self.pygame_canvas.end_frame(canvas)
         
     def close(self):
         bs.stack.stack('quit')

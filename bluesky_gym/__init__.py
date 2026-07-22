@@ -44,3 +44,11 @@ def register_envs():
         entry_point="bluesky_gym.envs.merge_env:MergeEnv",
         max_episode_steps=50,
     )
+
+    # No max_episode_steps: CompetitionEnv truncates itself on simulated time
+    # (episode_time_limit), so the episode budget is independent of action_frequency.
+    register(
+        id="CompetitionEnv-v0",
+        entry_point="bluesky_gym.envs.competition_env:CompetitionEnv",
+    )
+    

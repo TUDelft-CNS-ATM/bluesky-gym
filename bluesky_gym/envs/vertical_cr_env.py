@@ -1,11 +1,20 @@
 import numpy as np
-import pygame
-
 import bluesky as bs
 import bluesky_gym.envs.common.functions as fn
 
 import gymnasium as gym
 from gymnasium import spaces
+
+from core.observations import (
+    OwnAltitudeObservation, TargetAltitudeObservation,
+    RunwayDistanceObservation, IntruderObservation,
+)
+from core.rendering import (
+    PygameCanvas, TopDownProjection, SideProfileProjection,
+    draw_aircraft, draw_intruder,
+    draw_side_aircraft, draw_side_intruder, draw_ground, draw_runway, draw_target_altitude,
+)
+from core.actions import VerticalSpeedAction
 
 
 DISTANCE_MARGIN = 5 # km
@@ -60,28 +69,30 @@ class VerticalCREnv(gym.Env):
 
     def __init__(self, render_mode=None):
         self.window_width = 512
-        self.window_height = 256
-        self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
+        self.window_height = 512
+        self.window_size = (self.window_width, self.window_height)
 
-        self.observation_space = spaces.Dict(
-            {
-                # Runway information
-                "altitude": spaces.Box(-np.inf, np.inf, dtype=np.float64),
-                "vz": spaces.Box(-np.inf, np.inf, dtype=np.float64),
-                "target_altitude": spaces.Box(-np.inf, np.inf, dtype=np.float64),
-                "runway_distance": spaces.Box(-np.inf, np.inf, dtype=np.float64),
-                # Intruder information
-                "intruder_distance": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64),
-                "cos_difference_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64),
-                "sin_difference_pos": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64),
-                "altitude_difference": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64),
-                "x_difference_speed": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64),
-                "y_difference_speed": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64),
-                "z_difference_speed": spaces.Box(-np.inf, np.inf, shape = (NUM_INTRUDERS,), dtype=np.float64)
-            }
+        self.altitude_obs = OwnAltitudeObservation(alt_mean=ALT_MEAN, alt_std=ALT_STD, vz_mean=VZ_MEAN, vz_std=VZ_STD)
+        self.target_alt_obs = TargetAltitudeObservation(alt_mean=ALT_MEAN, alt_std=ALT_STD)
+        self.runway_obs = RunwayDistanceObservation(
+            rwy_lat=RWY_LAT, rwy_lon=RWY_LON,
+            default_distance=DEFAULT_RWY_DIS, dist_mean=RWY_DIS_MEAN, dist_std=RWY_DIS_STD,
         )
+        self.intruder_obs = IntruderObservation(
+            n=NUM_INTRUDERS, sort_by="distance", include_vertical=True, alt_norm=ALT_STD,
+        )
+
+        self.observation_space = spaces.Dict({
+            **self.altitude_obs.space(),
+            **self.target_alt_obs.space(),
+            **self.runway_obs.space(),
+            **self.intruder_obs.space(),
+        })
        
-        self.action_space = spaces.Box(-1, 1, shape=(1,), dtype=np.float64)
+        self.vertical_action = VerticalSpeedAction(vs_scale=ACTION_2_MS)
+        self.action_space = self.vertical_action.space()
+
+        self.agent = "KL001"
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -98,89 +109,51 @@ class VerticalCREnv(gym.Env):
         self.total_intrusions = 0
         self.final_altitude = 0
 
-        """
-        If human-rendering is used, `self.window` will be a reference
-        to the window that we draw to. `self.clock` will be a clock that is used
-        to ensure that the environment is rendered at the correct framerate in
-        human-mode. They will remain `None` until human-mode is used for the
-        first time.
-        """
-        self.window = None
-        self.clock = None
+        half_h = self.window_height // 2
+        self.pygame_canvas = PygameCanvas(self.window_width, self.window_height)
+        self.top_projection = TopDownProjection(
+            max_distance=250, ref_lat=0, ref_lon=0,
+            viewport=(0, 0, self.window_width, half_h),
+        )
+        self.side_projection = SideProfileProjection(
+            max_distance=250, max_altitude=5000,
+            viewport=(0, half_h, self.window_width, half_h),
+        )
 
 
     def _get_obs(self):
-        """
-        Observation consists of altitude, vertical speed, target altitude and distance to runway
-        Very crude normalization in place for now
-        """
+        ac_idx = bs.traf.id2idx(self.agent)
 
-        ac_idx = bs.traf.id2idx('KL001')
+        # raw values retained for _get_reward, _render_frame (approach C)
+        self.altitude = bs.traf.alt[ac_idx]
+        self.vz = bs.traf.vs[ac_idx]
+        self.runway_distance = DEFAULT_RWY_DIS - bs.tools.geo.kwikdist(
+            RWY_LAT, RWY_LON, bs.traf.lat[ac_idx], bs.traf.lon[ac_idx]) * NM2KM
 
+        # intruder render data in creation order (approach C)
         self.intruder_distance = []
         self.cos_bearing = []
         self.sin_bearing = []
-        self.altitude_difference = []
-        self.x_difference_speed = []
-        self.y_difference_speed = []
-        self.z_difference_speed = []
-
-        self.ac_hdg = bs.traf.hdg[ac_idx]
-        self.altitude = bs.traf.alt[0]
-        self.vz = bs.traf.vs[0]
-
+        ac_hdg = bs.traf.hdg[ac_idx]
         for i in range(NUM_INTRUDERS):
-            int_idx = i+1
-            int_qdr, int_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
-
+            int_idx = i + 1
+            int_qdr, int_dis = bs.tools.geo.kwikqdrdist(
+                bs.traf.lat[ac_idx], bs.traf.lon[ac_idx],
+                bs.traf.lat[int_idx], bs.traf.lon[int_idx])
             self.intruder_distance.append(int_dis * NM2KM)
-
-            alt_dif = bs.traf.alt[int_idx] - self.altitude
-            vz_dif = bs.traf.vs[int_idx] - self.vz
-
-            self.altitude_difference.append(alt_dif)
-            self.z_difference_speed.append(vz_dif)
-
-            bearing = self.ac_hdg - int_qdr
-            bearing = fn.bound_angle_positive_negative_180(bearing)
-
+            bearing = fn.bound_angle_positive_negative_180(ac_hdg - int_qdr)
             self.cos_bearing.append(np.cos(np.deg2rad(bearing)))
             self.sin_bearing.append(np.sin(np.deg2rad(bearing)))
 
-            heading_difference = bs.traf.hdg[ac_idx] - bs.traf.hdg[int_idx]
-            x_dif = - np.cos(np.deg2rad(heading_difference)) * bs.traf.gs[int_idx]
-            y_dif = bs.traf.gs[ac_idx] - np.sin(np.deg2rad(heading_difference)) * bs.traf.gs[int_idx]
-
-            self.x_difference_speed.append(x_dif)
-            self.y_difference_speed.append(y_dif)
-        
-        self.runway_distance = (DEFAULT_RWY_DIS - bs.tools.geo.kwikdist(RWY_LAT,RWY_LON,bs.traf.lat[0],bs.traf.lon[0])*NM2KM)
-
-        # very crude normalization
-        obs_altitude = np.array([(self.altitude - ALT_MEAN)/ALT_STD])
-        obs_vz = np.array([(self.vz - VZ_MEAN) / VZ_STD])
-        obs_target_alt = np.array([((self.target_alt- ALT_MEAN)/ALT_STD)])
-        obs_runway_distance = np.array([(self.runway_distance - RWY_DIS_MEAN)/RWY_DIS_STD])
-
-        observation = {
-                "altitude": obs_altitude,
-                "vz": obs_vz,
-                "target_altitude": obs_target_alt,
-                "runway_distance": obs_runway_distance,
-                # Intruder information
-                "intruder_distance": np.array(self.intruder_distance)/DEFAULT_RWY_DIS,
-                "cos_difference_pos": np.array(self.cos_bearing),
-                "sin_difference_pos": np.array(self.sin_bearing),
-                "altitude_difference": np.array(self.altitude_difference)/ALT_STD,
-                "x_difference_speed": np.array(self.x_difference_speed)/AC_SPD,
-                "y_difference_speed": np.array(self.y_difference_speed)/AC_SPD,
-                "z_difference_speed": np.array(self.z_difference_speed)
-            }
-        
-        return observation
+        return {
+            **self.altitude_obs.observe(self.agent),
+            **self.target_alt_obs.observe(self.target_alt),
+            **self.runway_obs.observe(self.agent),
+            **self.intruder_obs.observe(self.agent),
+        }
     
-    def _generate_conflicts(self, acid = 'KL001'):
-        target_idx = bs.traf.id2idx(acid)
+    def _generate_conflicts(self):
+        target_idx = bs.traf.id2idx(self.agent)
         altitude = bs.traf.alt[target_idx]
         spd = bs.traf.gs[target_idx]
         for i in range(NUM_INTRUDERS):
@@ -227,7 +200,7 @@ class VerticalCREnv(gym.Env):
         return reward, done
 
     def _check_intrusion(self):
-        ac_idx = bs.traf.id2idx('KL001')
+        ac_idx = bs.traf.id2idx(self.agent)
         reward = 0
         for i in range(NUM_INTRUDERS):
             int_idx = i+1
@@ -238,21 +211,8 @@ class VerticalCREnv(gym.Env):
                 reward += INTRUSION_PENALTY
         return reward
         
-    def _get_action(self,action):
-        # Transform action to the meters per second
-        action = action * ACTION_2_MS
-
-        # Bluesky interpretes vertical velocity command through altitude commands 
-        # with a vertical speed (magnitude). So check sign of action and give arbitrary 
-        # altitude command
-
-        # The actions are then executed through stack commands;
-        if action >= 0:
-            bs.traf.selalt[0] = 1000000 # High target altitude to start climb
-            bs.traf.selvs[0] = action
-        elif action < 0:
-            bs.traf.selalt[0] = 0 # High target altitude to start descent
-            bs.traf.selvs[0] = action
+    def _get_action(self, action):
+        self.vertical_action.execute(self.agent, action)
 
     def reset(self, seed=None, options=None):
         
@@ -266,10 +226,17 @@ class VerticalCREnv(gym.Env):
         alt_init = np.random.randint(ALT_MIN, ALT_MAX)
         self.target_alt = alt_init + np.random.randint(-TARGET_ALT_DIF,TARGET_ALT_DIF)
 
-        bs.traf.cre('KL001',actype="A320",acalt=alt_init,acspd=AC_SPD)
+        start_lat, start_lon = fn.get_point_at_distance(RWY_LAT, RWY_LON, DEFAULT_RWY_DIS, 270)
+        mid_lat, mid_lon = fn.get_point_at_distance(RWY_LAT, RWY_LON, DEFAULT_RWY_DIS / 2, 270)
+
+        bs.traf.cre(self.agent, actype="A320",
+                    aclat=start_lat, aclon=start_lon, achdg=90,
+                    acalt=alt_init, acspd=AC_SPD)
         bs.traf.swvnav[0] = False
 
-        self._generate_conflicts(acid = 'KL001')
+        self.top_projection.update_ref(mid_lat, mid_lon)
+
+        self._generate_conflicts()
 
         observation = self._get_obs()
         info = self._get_info()
@@ -307,122 +274,58 @@ class VerticalCREnv(gym.Env):
         pass
 
     def _render_frame(self):
-        if self.window is None and self.render_mode == "human":
-            pygame.init()
-            pygame.display.init()
-            self.window = pygame.display.set_mode(self.window_size)
+        ac_idx = bs.traf.id2idx(self.agent)
+        canvas = self.pygame_canvas.begin_frame()
+        ac_length_px = self.side_projection.scale_horizontal(4)
 
-        if self.clock is None and self.render_mode == "human":
-            self.clock = pygame.time.Clock()
-
-        zero_offset = 25
-        max_distance = 180 # width of screen in km
-
-        canvas = pygame.Surface(self.window_size)
-        canvas.fill((135,206,235))
-
-        # draw a ground surface
-        pygame.draw.rect(
-            canvas, 
-            (154,205,50),
-            pygame.Rect(
-                (0,self.window_height-50),
-                (self.window_width, 50)
-                ),
-        )
-        
-        # draw target altitude
-        max_alt = 5000
-        target_alt = int((-1*(self.target_alt-max_alt)/max_alt)*(self.window_height-50))
-
-        pygame.draw.line(
-            canvas,
-            (255,255,255),
-            (0,target_alt),
-            (self.window_width,target_alt)
-        )
-
-        # draw runway
-        runway_length = 30
-        runway_start = int(((self.runway_distance + zero_offset)/max_distance)*self.window_width)
-        runway_end = int(runway_start + (runway_length/max_distance)*self.window_width)
-
-        pygame.draw.line(
-            canvas,
-            (119,136,153),
-            (runway_start,self.window_height - 50),
-            (runway_end,self.window_height - 50),
-            width = 3
-        )
-
-        # draw aircraft
-        aircraft_alt = int((-1*(self.altitude-max_alt)/max_alt)*(self.window_height-50))
-        aircraft_start = int(((zero_offset)/max_distance)*self.window_width)
-        aircraft_end = int(aircraft_start + (4/max_distance)*self.window_width)
-
-        pygame.draw.line(
-            canvas,
-            (0,0,0),
-            (aircraft_start,aircraft_alt),
-            (aircraft_end,aircraft_alt),
-            width = 5
-        )
+        # --- Top half: top-down view ---
+        self.top_projection.clip(canvas)
+        ax, ay = self.top_projection.project(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
+        draw_aircraft(canvas, ax, ay, bs.traf.hdg[ac_idx],
+                      body_km=8, heading_km=50, projection=self.top_projection)
 
         for i in range(NUM_INTRUDERS):
-            int_idx = i+1
-            int_alt = int((-1*(bs.traf.alt[int_idx]-max_alt)/max_alt)*(self.window_height-50))
-            int_x_dis = self.intruder_distance[int_idx - 1] * self.cos_bearing[int_idx - 1]
-            int_y_dis = self.intruder_distance[int_idx - 1] * self.sin_bearing[int_idx - 1]
-            width_temp = int(5+int_y_dis/20)
-            aircraft_start = int(((zero_offset + int_x_dis )/max_distance)*self.window_width)
-            aircraft_end = int(aircraft_start + (4/max_distance)*self.window_width)
-            color = (255,255,255) if abs(int_y_dis) > DISTANCE_MARGIN else 'red'
+            int_idx = i + 1
+            ix, iy = self.top_projection.project(bs.traf.lat[int_idx], bs.traf.lon[int_idx])
+            int_dis = bs.tools.geo.kwikdist(
+                bs.traf.lat[ac_idx], bs.traf.lon[ac_idx],
+                bs.traf.lat[int_idx], bs.traf.lon[int_idx])
+            vert_dis = abs(bs.traf.alt[ac_idx] - bs.traf.alt[int_idx])
+            draw_intruder(canvas, ix, iy, bs.traf.hdg[int_idx], self.top_projection,
+                          body_km=3, heading_km=10,
+                          safety_radius_km=INTRUSION_DISTANCE * NM2KM,
+                          in_intrusion=int_dis < INTRUSION_DISTANCE and vert_dis < VERTICAL_MARGIN)
+        self.top_projection.unclip(canvas)
 
-            pygame.draw.line(
-                canvas,
-                color,
-                (aircraft_start,int_alt),
-                (aircraft_end,int_alt),
-                width = width_temp
-            )
+        # --- Bottom half: side profile (x-aligned with top view) ---
+        self.side_projection.clip(canvas)
+        draw_ground(canvas, self.side_projection)
 
-            hor_margin = (DISTANCE_MARGIN*NM2KM/max_distance)*self.window_width
-            ver_margin = (VERTICAL_MARGIN/max_alt)*self.window_height
+        _, target_y = self.side_projection.project(0, self.target_alt)
+        draw_target_altitude(canvas, target_y, self.side_projection)
 
-            pygame.draw.line(
-                canvas,
-                'black',
-                (aircraft_start-hor_margin/2,int_alt-ver_margin),
-                (aircraft_end+hor_margin/2,int_alt-ver_margin),
-                width = 1
-            )
-            pygame.draw.line(
-                canvas,
-                'black',
-                (aircraft_start-hor_margin/2,int_alt+ver_margin),
-                (aircraft_end+hor_margin/2,int_alt+ver_margin),
-                width = 1
-            )
-            pygame.draw.line(
-                canvas,
-                'black',
-                (aircraft_start-hor_margin/2,int_alt-ver_margin),
-                (aircraft_start-hor_margin/2,int_alt+ver_margin),
-                width = 1
-            )
-            pygame.draw.line(
-                canvas,
-                'black',
-                (aircraft_end+hor_margin/2,int_alt-ver_margin),
-                (aircraft_end+hor_margin/2,int_alt+ver_margin),
-                width = 1
-            )
+        rwy_x, _ = self.top_projection.project(RWY_LAT, RWY_LON)
+        _, rwy_y = self.side_projection.project(0, 0)
+        draw_runway(canvas, rwy_x, rwy_y, self.side_projection.scale_horizontal(30))
 
+        ac_side_y = self.side_projection.altitude_to_y(self.altitude)
+        draw_side_aircraft(canvas, ax, ac_side_y, ac_length_px)
 
+        for i in range(NUM_INTRUDERS):
+            int_idx = i + 1
+            ix, _ = self.top_projection.project(bs.traf.lat[int_idx], bs.traf.lon[int_idx])
+            int_side_y = self.side_projection.altitude_to_y(bs.traf.alt[int_idx])
+            int_dis = bs.tools.geo.kwikdist(
+                bs.traf.lat[ac_idx], bs.traf.lon[ac_idx],
+                bs.traf.lat[int_idx], bs.traf.lon[int_idx])
+            vert_dis = abs(bs.traf.alt[ac_idx] - bs.traf.alt[int_idx])
+            draw_side_intruder(canvas, ix, int_side_y, ac_length_px, self.side_projection,
+                               in_intrusion=int_dis < INTRUSION_DISTANCE and vert_dis < VERTICAL_MARGIN,
+                               hor_margin_km=INTRUSION_DISTANCE * NM2KM,
+                               ver_margin_alt=VERTICAL_MARGIN)
+        self.side_projection.unclip(canvas)
 
-        self.window.blit(canvas, canvas.get_rect())
-        pygame.display.update()
-        self.clock.tick(self.metadata["render_fps"])
+        self.pygame_canvas.end_frame(canvas)
         
     def close(self):
         bs.stack.stack('quit')

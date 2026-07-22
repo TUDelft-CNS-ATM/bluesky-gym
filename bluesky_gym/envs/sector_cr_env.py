@@ -1,14 +1,19 @@
 import numpy as np
-import pygame
-
 import bluesky as bs
 import bluesky_gym.envs.common.functions as fn
 
 import gymnasium as gym
 from gymnasium import spaces
 
+from core.observations import DriftObservation, OwnAirspeedObservation, IntruderObservation
+from core.rendering import (
+    PygameCanvas, TopDownProjection,
+    draw_aircraft, draw_intruder, draw_polygon,
+)
+from core.actions import HeadingAction, SpeedAction, combine_action_spaces
+
 AC_DENSITY_RANGE = (0.003, 0.007) # In AC/NM^2
-AC_DENSITY_MU = 0.005 # In AC/NM^2
+AC_DENSITY_MU = 0.003 # In AC/NM^2
 AC_DENSITY_SIGMA = 0.001 # In AC/NM^2
 
 POLY_AREA_RANGE = (2400, 3750) # In NM^2
@@ -18,11 +23,9 @@ ALTITUDE = 350 # In FL
 # Aircraft parameters
 AC_SPD = 150
 AC_TYPE = "A320"
-ACTOR = "KL001"
 
 # Conversion factors
 NM2KM = 1.852
-MpS2Kt = 1.94384
 FL2M = 30.48
 
 INTRUSION_DISTANCE = 5 # NM
@@ -47,23 +50,22 @@ class SectorCREnv(gym.Env):
         self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
         self.density_mode = ac_density_mode
         self.poly_name = 'airspace'
-        # Feel free to add more observation spaces
-        self.observation_space = spaces.Dict(
-            {
-                "cos(drift)": spaces.Box(-1, 1, shape=(1,), dtype=np.float64),
-                "sin(drift)": spaces.Box(-1, 1, shape=(1,), dtype=np.float64),
-                "airspeed": spaces.Box(-1, 1, shape=(1,), dtype=np.float64),
-                "x_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
-                "y_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
-                "vx_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
-                "vy_r": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
-                "cos(track)": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
-                "sin(track)": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64),
-                "distances": spaces.Box(-np.inf, np.inf, shape=(NUM_AC_STATE,), dtype=np.float64)
-            }
-        )
 
-        self.action_space = spaces.Box(-1, 1, shape=(2,), dtype=np.float64)
+        self.drift_obs = DriftObservation()
+        self.airspeed_obs = OwnAirspeedObservation(spd_mean=AC_SPD, spd_std=6.0)
+        self.intruder_obs = IntruderObservation(n=NUM_AC_STATE, sort_by="distance", frame="body")
+
+        self.observation_space = spaces.Dict({
+            **self.drift_obs.space(),
+            **self.airspeed_obs.space(),
+            **self.intruder_obs.space(),
+        })
+
+        self.agent = "KL001"
+
+        self.heading_action = HeadingAction(d_heading=D_HEADING)
+        self.speed_action = SpeedAction(d_speed=D_VELOCITY)
+        self.action_space = combine_action_spaces([self.heading_action, self.speed_action])
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -80,8 +82,11 @@ class SectorCREnv(gym.Env):
         self.total_intrusions = 0
         self.average_drift = np.array([])
 
-        self.window = None
-        self.clock = None
+        self.pygame_canvas = PygameCanvas(self.window_width, self.window_height)
+        self.projection = TopDownProjection(
+            max_distance=200, ref_lat=CENTER[0], ref_lon=CENTER[1],
+            window_size=(self.window_width, self.window_height),
+        )
     
     def reset(self, seed=None, options=None):
         bs.traf.reset()
@@ -93,6 +98,15 @@ class SectorCREnv(gym.Env):
         self.average_drift = np.array([])
        
         self._generate_polygon() # Create airspace polygon
+
+        max_distance = max(
+            np.linalg.norm(p1 - p2)
+            for p1 in self.poly_points for p2 in self.poly_points
+        ) * NM2KM
+        self.projection = TopDownProjection(
+            max_distance=max_distance, ref_lat=CENTER[0], ref_lon=CENTER[1],
+            window_size=(self.window_width, self.window_height),
+        )
         
         if self.density_mode == "normal":
             rand_density = np.random.normal(AC_DENSITY_MU, AC_DENSITY_SIGMA)
@@ -121,7 +135,7 @@ class SectorCREnv(gym.Env):
             if self.render_mode == "human":              
                 self._render_frame()
         
-        observation = self._get_obs()        
+        observation = self._get_obs()     
         reward = self._get_reward()
         info = self._get_info()
 
@@ -131,7 +145,7 @@ class SectorCREnv(gym.Env):
         return observation, reward, False, truncate, info
     
     def _check_inside_airspace(self):
-        ac_idx = bs.traf.id2idx(ACTOR)
+        ac_idx = bs.traf.id2idx(self.agent)
         if bs.tools.areafilter.checkInside(self.poly_name, np.array([bs.traf.lat[ac_idx]]), np.array([bs.traf.lon[ac_idx]]), np.array([ALTITUDE*FL2M])):
             return False
         else:
@@ -207,7 +221,7 @@ class SectorCREnv(gym.Env):
         hdg_agent = fn.get_hdg(init_pos_agent, wpt_agent)
         
         # Actor AC is the only one that has ACTOR as acid
-        bs.traf.cre(ACTOR, actype=AC_TYPE, aclat=init_pos_agent[0], aclon=init_pos_agent[1], achdg=hdg_agent, acspd=AC_SPD, acalt=ALTITUDE)
+        bs.traf.cre(self.agent, actype=AC_TYPE, aclat=init_pos_agent[0], aclon=init_pos_agent[1], achdg=hdg_agent, acspd=AC_SPD, acalt=ALTITUDE)
         
         for i in range(1, len(init_p_latlong)):
             wpt = fn.nm_to_latlong(CENTER, self.wpts[i])
@@ -234,91 +248,22 @@ class SectorCREnv(gym.Env):
         return total_reward
     
     def _get_obs(self):
+        ac_idx = bs.traf.id2idx(self.agent)
 
-        ac_idx = bs.traf.id2idx(ACTOR)
-
-        # Observation vector shape and components
-        self.cos_drift = np.array([])
-        self.sin_drift = np.array([])
-        self.airspeed = np.array([])
-        self.x_r = np.array([])
-        self.y_r = np.array([])
-        self.vx_r = np.array([])
-        self.vy_r = np.array([])
-        self.cos_track = np.array([])
-        self.sin_track = np.array([])
-        self.distances = np.array([])
-
-        # Drift of agent aircraft for reward calculation
-        drift = 0
-
-        ac_hdg = bs.traf.hdg[ac_idx]
-        
-        # Get and decompose agent aircaft drift
+        # raw drift retained for _check_drift (approach C)
         wpts = fn.nm_to_latlong(CENTER, self.wpts[ac_idx])
-        wpt_qdr, _  = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], wpts[0], wpts[1])
+        wpt_qdr, _ = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], wpts[0], wpts[1])
+        self.drift = fn.bound_angle_positive_negative_180(bs.traf.hdg[ac_idx] - wpt_qdr)
 
-        drift = ac_hdg - wpt_qdr
-        drift = fn.bound_angle_positive_negative_180(drift)
-        self.drift = drift
-        self.cos_drift = np.append(self.cos_drift, np.cos(np.deg2rad(drift)))
-        self.sin_drift = np.append(self.sin_drift, np.sin(np.deg2rad(drift)))
-
-        # Get agent aircraft airspeed, m/s
-        self.airspeed = np.append(self.airspeed, bs.traf.tas[ac_idx])
-
-        vx = np.cos(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
-        vy = np.sin(np.deg2rad(ac_hdg)) * bs.traf.tas[ac_idx]
-
-        ac_loc = fn.latlong_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx]])) * NM2KM * 1000 # Two-step conversion lat/long -> NM -> m
-        distances = [fn.euclidean_distance(ac_loc, fn.latlong_to_nm(CENTER, np.array([bs.traf.lat[i], bs.traf.lon[i]])) * NM2KM * 1000) for i in range(1, self.num_ac)]
-        ac_idx_by_dist = np.argsort(distances)
-
-        for i in range(self.num_ac-1):
-            ac_idx = ac_idx_by_dist[i]+1
-            int_hdg = bs.traf.hdg[ac_idx]
-            
-            # Intruder AC relative position, m
-            int_loc = fn.latlong_to_nm(CENTER, np.array([bs.traf.lat[ac_idx], bs.traf.lon[ac_idx]])) * NM2KM * 1000
-            self.x_r = np.append(self.x_r, int_loc[0] - ac_loc[0])
-            self.y_r = np.append(self.y_r, int_loc[1] - ac_loc[1])
-            
-            # Intruder AC relative velocity, m/s
-            vx_int = np.cos(np.deg2rad(int_hdg)) * bs.traf.tas[ac_idx]
-            vy_int = np.sin(np.deg2rad(int_hdg)) * bs.traf.tas[ac_idx]
-            self.vx_r = np.append(self.vx_r, vx_int - vx)
-            self.vy_r = np.append(self.vy_r, vy_int - vy)
-
-            # Intruder AC relative track, rad
-            track = np.arctan2(vy_int - vy, vx_int - vx)
-            self.cos_track = np.append(self.cos_track, np.cos(track))
-            self.sin_track = np.append(self.sin_track, np.sin(track))
-
-            self.distances = np.append(self.distances, distances[ac_idx-1])
-
-        observation = {
-            "cos(drift)": self.cos_drift,
-            "sin(drift)": self.sin_drift,
-            "airspeed": (self.airspeed-150)/6,
-            "x_r": self.x_r[:NUM_AC_STATE]/13000,
-            "y_r": self.y_r[:NUM_AC_STATE]/13000,
-            "vx_r": self.vx_r[:NUM_AC_STATE]/32,
-            "vy_r": self.vy_r[:NUM_AC_STATE]/66,
-            "cos(track)": self.cos_track[:NUM_AC_STATE],
-            "sin(track)": self.sin_track[:NUM_AC_STATE],
-            "distances": (self.distances[:NUM_AC_STATE]-50000.)/15000.
+        return {
+            **self.drift_obs.observe(self.agent, wpt_qdr),
+            **self.airspeed_obs.observe(self.agent),
+            **self.intruder_obs.observe(self.agent),
         }
-
-        return observation
     
     def _get_action(self, action):
-        dh = action[0] * D_HEADING
-        dv = action[1] * D_VELOCITY
-        heading_new = fn.bound_angle_positive_negative_180(bs.traf.hdg[bs.traf.id2idx(ACTOR)] + dh)
-        speed_new = (bs.traf.cas[bs.traf.id2idx(ACTOR)] + dv) * MpS2Kt
-
-        bs.stack.stack(f"HDG {ACTOR} {heading_new}")
-        bs.stack.stack(f"SPD {ACTOR} {speed_new}")
+        self.heading_action.execute(self.agent, action[0])
+        self.speed_action.execute(self.agent, action[1])
 
     def _check_drift(self):
         drift = abs(np.deg2rad(self.drift))
@@ -326,7 +271,7 @@ class SectorCREnv(gym.Env):
         return drift * DRIFT_PENALTY
     
     def _check_intrusion(self):
-        ac_idx = bs.traf.id2idx(ACTOR)
+        ac_idx = bs.traf.id2idx(self.agent)
         reward = 0
         for i in range(self.num_ac-1):
             int_idx = i+1
@@ -338,107 +283,34 @@ class SectorCREnv(gym.Env):
         return reward
         
     def _render_frame(self):
-        if self.window is None and self.render_mode == "human":
-            pygame.init()
-            pygame.display.init()
-            self.window = pygame.display.set_mode(self.window_size)
+        ac_idx = bs.traf.id2idx(self.agent)
+        canvas = self.pygame_canvas.begin_frame()
 
-        if self.clock is None and self.render_mode == "human":
-            self.clock = pygame.time.Clock()
-
-        max_distance = max(np.linalg.norm(point1 - point2) for point1 in self.poly_points for point2 in self.poly_points)*NM2KM
-        
-        px_per_km = self.window_width/max_distance
-
-        canvas = pygame.Surface(self.window_size)
-        canvas.fill((135,206,235))
-        
-        # Draw airspace
-        airspace_color = (255, 0, 0)
-        coords = [((self.window_width/2)+point[0]*NM2KM*px_per_km, (self.window_height/2)-point[1]*NM2KM*px_per_km) for point in self.poly_points]
-        pygame.draw.polygon(canvas, airspace_color, coords, width=2)
+        # Draw airspace polygon
+        poly_coords = [
+            self.projection.project(*fn.nm_to_latlong(CENTER, pt))
+            for pt in self.poly_points
+        ]
+        draw_polygon(canvas, poly_coords, color=(255, 0, 0), filled=False, width=2)
 
         # Draw ownship
-        ac_idx = bs.traf.id2idx(ACTOR)
-        ac_length = 10
-        ac_hdg = bs.traf.hdg[ac_idx]
-        heading_end_x = np.cos(np.deg2rad(ac_hdg)) * ac_length
-        heading_end_y = np.sin(np.deg2rad(ac_hdg)) * ac_length
-        ac_qdr, ac_dis = bs.tools.geo.kwikqdrdist(CENTER[0], CENTER[1], bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
-
-        x_pos = (self.window_width/2)+(np.cos(np.deg2rad(ac_qdr))*(ac_dis * NM2KM)*px_per_km)
-        y_pos = (self.window_height/2)-(np.sin(np.deg2rad(ac_qdr))*(ac_dis * NM2KM)*px_per_km)
-
-        pygame.draw.line(canvas,
-            (0,0,0),
-            (x_pos,y_pos),
-            ((x_pos)+heading_end_x,(y_pos)-heading_end_y),
-            width = 4
-        )
-
-        # Draw heading line
-        heading_length = 20
-        heading_end_x = np.cos(np.deg2rad(ac_hdg)) * heading_length
-        heading_end_y = np.sin(np.deg2rad(ac_hdg)) * heading_length
-
-        pygame.draw.line(canvas,
-                (0,0,0),
-                (x_pos,y_pos),
-                ((x_pos)+heading_end_x,(y_pos)-heading_end_y),
-                width = 1
-        )
+        x, y = self.projection.project(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
+        draw_aircraft(canvas, x, y, bs.traf.hdg[ac_idx],
+                      body_km=3, heading_km=10, projection=self.projection)
 
         # Draw intruders
-        ac_length = 3
+        for i in range(self.num_ac - 1):
+            int_idx = i + 1
+            ix, iy = self.projection.project(bs.traf.lat[int_idx], bs.traf.lon[int_idx])
+            separation = bs.tools.geo.kwikdist(
+                bs.traf.lat[ac_idx], bs.traf.lon[ac_idx],
+                bs.traf.lat[int_idx], bs.traf.lon[int_idx])
+            draw_intruder(canvas, ix, iy, bs.traf.hdg[int_idx], self.projection,
+                          body_km=2, heading_km=5,
+                          safety_radius_km=INTRUSION_DISTANCE * NM2KM,
+                          in_intrusion=separation < INTRUSION_DISTANCE)
 
-        for i in range(self.num_ac-1):
-            int_idx = i+1
-            int_hdg = bs.traf.hdg[int_idx]
-            heading_end_x = np.cos(np.deg2rad(int_hdg)) * ac_length
-            heading_end_y = np.sin(np.deg2rad(int_hdg)) * ac_length
-
-            int_qdr, int_dis = bs.tools.geo.kwikqdrdist(CENTER[0], CENTER[1], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
-            separation = bs.tools.geo.kwikdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
-
-            # Determine color
-            if separation < INTRUSION_DISTANCE:
-                color = (220,20,60)
-            else: 
-                color = (80,80,80)
-
-            x_pos = (self.window_width/2)+(np.cos(np.deg2rad(int_qdr))*(int_dis * NM2KM)*px_per_km)
-            y_pos = (self.window_height/2)-(np.sin(np.deg2rad(int_qdr))*(int_dis * NM2KM)*px_per_km)
-
-            pygame.draw.line(canvas,
-                color,
-                (x_pos,y_pos),
-                ((x_pos)+heading_end_x,(y_pos)-heading_end_y),
-                width = 4
-            )
-
-            # Draw heading line
-            heading_length = 20
-            heading_end_x = np.cos(np.deg2rad(int_hdg)) * heading_length
-            heading_end_y = np.sin(np.deg2rad(int_hdg)) * heading_length
-
-            pygame.draw.line(canvas,
-                color,
-                (x_pos,y_pos),
-                ((x_pos)+heading_end_x,(y_pos)-heading_end_y),
-                width = 1
-            )
-
-            pygame.draw.circle(
-                canvas, 
-                color,
-                (x_pos,y_pos),
-                radius = INTRUSION_DISTANCE*NM2KM*px_per_km,
-                width = 2
-            )
-
-        self.window.blit(canvas, canvas.get_rect())
-        pygame.display.update()
-        self.clock.tick(self.metadata["render_fps"])
+        self.pygame_canvas.end_frame(canvas)
     
     def close(self):
         bs.stack.stack('quit')
