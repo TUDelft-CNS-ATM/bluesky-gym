@@ -11,7 +11,7 @@ For a complete list of the currently available environments click [here](bluesky
 
 ## 🏆 RL Competition
 
-This repository hosts an **air traffic control RL competition** organized by the TU Delft and [AI4REAL-NET](https://ai4realnet.eu/): 
+This repository hosts an **air traffic control RL competition** organized by the TU Delft and [AI4REALNET](https://ai4realnet.eu/): 
 Guide aircraft to their goals while avoiding conflicts, restricted areas, and sector exits in
 a single-agent and a multi-agent environment.
 
