@@ -8,6 +8,13 @@ rules and scoring see **[COMPETITION.md](COMPETITION.md)**.
 
 ## 1. Setup
 
+First, clone the competition branch and navigate to the repository:
+
+```bash
+git clone --branch AI4REAL-NET-Competition --single-branch https://github.com/TUDelft-CNS-ATM/bluesky-gym.git
+cd bluesky-gym
+```
+
 Requires Python ≥ 3.10. The project is managed with [uv](https://docs.astral.sh/uv/)
 (there is a `uv.lock`), but any virtualenv works.
 
