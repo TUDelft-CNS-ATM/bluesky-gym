@@ -184,14 +184,14 @@ class VerticalCREnv(gym.Env):
         altitude = bs.traf.alt[target_idx]
         spd = bs.traf.gs[target_idx]
         for i in range(NUM_INTRUDERS):
-            dpsi = np.random.randint(45,315)
-            cpa = np.random.randint(0,INTRUSION_DISTANCE)
-            tlosh = np.random.randint(100,int((DEFAULT_RWY_DIS*0.9)*1000/spd))
+            dpsi = self.np_random.integers(45,315)
+            cpa = self.np_random.integers(0,INTRUSION_DISTANCE)
+            tlosh = self.np_random.integers(100,int((DEFAULT_RWY_DIS*0.9)*1000/spd))
             average_tod = (DEFAULT_RWY_DIS*1000/spd) - 2*self.target_alt/ACTION_2_MS
             if tlosh > average_tod:
-                dH = np.random.randint(int(-altitude + 500),int((self.target_alt - altitude) + 100))
+                dH = self.np_random.integers(int(-altitude + 500),int((self.target_alt - altitude) + 100))
             else:
-                dH = np.random.randint(int((self.target_alt - altitude) - 500),int((self.target_alt - altitude) + 500))
+                dH = self.np_random.integers(int((self.target_alt - altitude) - 500),int((self.target_alt - altitude) + 500))
             tlosv = 100000000000.
 
             bs.traf.creconfs(acid=f'{i}',actype="A320",targetidx=target_idx,dpsi=dpsi,dcpa=cpa,tlosh=tlosh,dH=dH,tlosv=tlosv)
@@ -263,8 +263,8 @@ class VerticalCREnv(gym.Env):
         self.total_intrusions = 0
         self.final_altitude = 0
 
-        alt_init = np.random.randint(ALT_MIN, ALT_MAX)
-        self.target_alt = alt_init + np.random.randint(-TARGET_ALT_DIF,TARGET_ALT_DIF)
+        alt_init = self.np_random.integers(ALT_MIN, ALT_MAX)
+        self.target_alt = alt_init + self.np_random.integers(-TARGET_ALT_DIF,TARGET_ALT_DIF)
 
         bs.traf.cre('KL001',actype="A320",acalt=alt_init,acspd=AC_SPD)
         bs.traf.swvnav[0] = False
