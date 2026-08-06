@@ -44,3 +44,7 @@ def register_envs():
         entry_point="bluesky_gym.envs.merge_env:MergeEnv",
         max_episode_steps=50,
     )
+    
+    register(id="HorizontalCREnv-v1",
+             entry_point="bluesky_gym.envs.horizontal_cr_envV1:HorizontalCrEnv",
+             max_episode_steps=200,)
