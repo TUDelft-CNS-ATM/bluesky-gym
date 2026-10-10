@@ -240,6 +240,9 @@ class CompetitionZooEnv(ParallelEnv):
                         aclat=spec.start[0], aclon=spec.start[1],
                         achdg=spec.heading, acspd=spec.speed, acalt=self.altitude)
         bs.stack.stack('RESO OFF')   # agents do not run BlueSky conflict resolution
+        # run the queued commands now, as in CompetitionEnv.reset, so that
+        # nothing is left pending for a following reset()
+        bs.stack.process()
 
         # fit the render projection to the sector
         sector_nm = np.array([fn.latlong_to_nm(center_arr, np.array(v)) for v in scenario.sector])

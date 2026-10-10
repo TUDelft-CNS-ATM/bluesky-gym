@@ -219,6 +219,11 @@ class CompetitionEnv(gym.Env):
                 bs.stack.stack(f"{route.ac_id} ADDWPT {lat} {lon}")
             self.intruder_ids.append(route.ac_id)
         bs.stack.stack('RESO OFF')   # intruders do not run BlueSky conflict resolution
+        # Run the queued commands now instead of at the next sim step:
+        # bs.traf.reset() does not clear the stack, so anything left pending
+        # here would hit the next episode's aircraft if reset() is called again
+        # before a step (stale ADDWPTs prepended to the new intruder routes).
+        bs.stack.process()
 
         # fit the render projection to the sector
         sector_nm = np.array([fn.latlong_to_nm(center_arr, np.array(v)) for v in scenario.sector])
