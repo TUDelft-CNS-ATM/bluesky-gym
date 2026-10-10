@@ -386,7 +386,10 @@ class CompetitionZooEnv(ParallelEnv):
         """Objective, competition-scored metrics. Called on every simulation
         step (fixed 1 s sampling, independent of action_frequency); never called
         from the reward. Uses the deterministic core.tools.kwikqdrdist copy.
-        Intrusions are recorded in each participant's own metrics (symmetric)."""
+        Intrusions are recorded in each participant's own metrics (symmetric).
+        intrusion_time is in intruder-seconds: each step adds dt per other
+        agent within intrusion_distance, so two simultaneous losses of
+        separation count 2 s per simulated second."""
         if dt is None:
             dt = self.sim_dt
         idx = bs.traf.id2idx(ac_id)
@@ -394,7 +397,7 @@ class CompetitionZooEnv(ParallelEnv):
         m = self.metrics[ac_id]
         m["flight_time"] += dt
 
-        # intrusions with the other live agents (rising-edge events + occupancy time)
+        # intrusions with the other live agents (rising-edge events + intruder-seconds)
         now_intr = set()
         for other in self.agents:
             if other == ac_id:
