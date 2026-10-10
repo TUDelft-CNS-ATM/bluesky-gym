@@ -280,9 +280,11 @@ class CompetitionZooEnv(ParallelEnv):
             self._reward_baseline[agent] = dict(self.metrics[agent])
 
         # fixed-length loop: remaining agents get their full sim seconds even
-        # when others reach their goal mid-step
+        # when others reach their goal mid-step. It stops early only when no
+        # agents are left or the time budget is spent (action_frequency need
+        # not divide episode_time_limit)
         for _ in range(self.action_frequency):
-            if not self.agents:
+            if not self.agents or self.sim_time >= self.episode_time_limit:
                 break
             bs.sim.step()
             self.sim_time += self.sim_dt

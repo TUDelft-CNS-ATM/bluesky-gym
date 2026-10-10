@@ -250,7 +250,10 @@ class CompetitionEnv(gym.Env):
             self._update_metrics(self.agent)   # every sim step (fixed 1 s DT)
             if self.render_mode == "human":
                 self._render_frame()
-            if self._waypoint_reached:
+            # stop at the goal, or once the time budget is spent (action_frequency
+            # need not divide episode_time_limit)
+            if (self._waypoint_reached
+                    or self.metrics[self.agent]["flight_time"] >= self.episode_time_limit):
                 break
 
         observation = self._get_obs(self.agent)
