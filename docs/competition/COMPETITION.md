@@ -42,6 +42,11 @@ and truncates for everyone once the simulated **3000 s** time budget is spent.
 | Other traffic | 10 scripted intruders on fixed routes | the other 9 agents (no scripted intruders) |
 | Import | `gym.make("CompetitionEnv-v0")` | `from bluesky_zoo.competition_v0 import CompetitionZooEnv` |
 
+In the multi-agent env the goals are drawn independently, so they may coincide
+or lie close together (seed-42 evaluation stream: 628 goal pairs closer than
+5 NM, in 476 of the 1000 scenarios); an agent is removed once it reaches its
+goal, so arrivals at nearby goals have to be sequenced to avoid intrusions.
+
 The **single-agent environment is the main testing ground**
 The **multi-agent environment is the main scoring goal** — see [Scoring](#how-you-are-scored).
 
