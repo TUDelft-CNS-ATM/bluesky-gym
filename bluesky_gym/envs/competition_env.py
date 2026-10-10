@@ -321,7 +321,10 @@ class CompetitionEnv(gym.Env):
     def _update_metrics(self, ac_id, dt=None):
         """Objective, competition-scored metrics. Called on every simulation
         step (fixed 1 s sampling, independent of action_frequency); never called
-        from the reward. Uses the deterministic core.tools.kwikqdrdist copy."""
+        from the reward. Uses the deterministic core.tools.kwikqdrdist copy.
+        intrusion_time is in intruder-seconds: each step adds dt per aircraft
+        within intrusion_distance, so two simultaneous losses of separation
+        count 2 s per simulated second."""
         if dt is None:
             dt = self.sim_dt
         idx = bs.traf.id2idx(ac_id)
@@ -329,7 +332,7 @@ class CompetitionEnv(gym.Env):
         m = self.metrics[ac_id]
         m["flight_time"] += dt
 
-        # intrusions with other aircraft (rising-edge events + occupancy time)
+        # intrusions with other aircraft (rising-edge events + intruder-seconds)
         now_intr = set()
         for int_id in self.intruder_ids:
             j = bs.traf.id2idx(int_id)

@@ -112,7 +112,7 @@ a global conflict count):
 | --- | --- | --- |
 | **Task** | `waypoint_reached` | 1 if the goal was reached, else 0 (→ goal-completion rate) |
 | **Safety** | `intrusion_events` | number of distinct losses of separation (< 5 NM) |
-| | `intrusion_time` | seconds spent in loss of separation |
+| | `intrusion_time` | intruder-seconds in loss of separation: each second adds the number of aircraft within 5 NM, so two simultaneous losses of separation count 2 s |
 | | `restricted_area_events` / `time_in_restricted_area` | entries into / seconds inside obstacles |
 | | `sector_exit_events` / `time_outside_sector` | exits from / seconds outside the sector |
 | **Efficiency** | `flight_time` | seconds flown (lower = more direct) |
