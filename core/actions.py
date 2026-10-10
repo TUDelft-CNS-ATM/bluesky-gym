@@ -92,8 +92,8 @@ class SpeedAction:
 
     The action is a normalized value in [-1, 1] (continuous) or a Discrete
     index (discrete). The ownship CAS is queried from the current BlueSky
-    simulation state and ``action * d_speed`` (m/s) is added before issuing
-    a SPD command in knots.
+    simulation state and ``action * d_speed`` (knots) is added before issuing
+    a SPD command in knots CAS.
 
     Parameters
     ----------
