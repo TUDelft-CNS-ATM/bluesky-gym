@@ -165,6 +165,15 @@ class ScenarioGenerator:
     agent_speed : m/s.
     intruder_speed_range : (min, max) m/s.
     center : (lat, lon) reference for the flat NM frame.
+    obstacle_clearance_nm : float
+        Distance agent starts and goals keep from every obstacle.
+    relaxed_obstacle_clearance_nm : float
+        Smaller clearance used, with half of ``agent_start_margin_nm``, when
+        no placement meets the strict margins within 1000 tries. The default
+        (5 km) is the env's waypoint-capture radius, so the goal's capture
+        disc stays free of obstacles; it is also roughly the A320 turn radius
+        at 150 m/s. If that fails too, start and goal only have to be outside
+        every obstacle: they are never placed inside one.
     agent_separation_nm : float
         Minimum spacing between different agents' start points. Keep above
         the intrusion distance so no episode begins with agents in conflict
@@ -183,7 +192,8 @@ class ScenarioGenerator:
                  agent_start_margin_nm=10.0,
                  obstacle_clearance_nm=10.0,
                  route_agent_proximity_nm=15.0,
-                 agent_separation_nm=10.0):
+                 agent_separation_nm=10.0,
+                 relaxed_obstacle_clearance_nm=5.0 / NM2KM):
         self.n_obstacles = n_obstacles
         self.n_intruders = n_intruders
         self.n_agents = n_agents
@@ -195,6 +205,7 @@ class ScenarioGenerator:
         self.center = center
         self.agent_start_margin_nm = agent_start_margin_nm
         self.obstacle_clearance_nm = obstacle_clearance_nm
+        self.relaxed_obstacle_clearance_nm = relaxed_obstacle_clearance_nm
         self.route_agent_proximity_nm = route_agent_proximity_nm
         self.agent_separation_nm = agent_separation_nm
 
@@ -236,35 +247,41 @@ class ScenarioGenerator:
     # -- agent ---------------------------------------------------------------
     def _generate_agent(self, rng, sector_poly, obstacle_polys, existing_starts=()):
         minx, miny, maxx, maxy = sector_poly.bounds
-        obstacle_buffers = [o.buffer(self.obstacle_clearance_nm) for o in obstacle_polys]
         goal_min, goal_max = self.goal_distance_range
 
-        def _valid(inner, p):
-            pt = Point(p)
-            if not inner.contains(pt):
-                return False
-            return not any(ob.contains(pt) for ob in obstacle_buffers)
+        def _try(inner, clearance):
+            # start and goal must lie in `inner` and outside every obstacle
+            # grown by `clearance` NM (0: outside the obstacle itself)
+            blocked = [o.buffer(clearance) if clearance else o for o in obstacle_polys]
 
-        def _try(inner, buffers_on):
+            def _valid(p):
+                pt = Point(p)
+                if not inner.contains(pt):
+                    return False
+                return not any(b.contains(pt) for b in blocked)
+
             for _ in range(1000):
                 s = (rng.uniform(minx, maxx), rng.uniform(miny, maxy))
-                if not (_valid(inner, s) if buffers_on else inner.contains(Point(s))):
+                if not _valid(s):
                     continue
                 if not _separated(s, existing_starts, self.agent_separation_nm):
                     continue
                 g = (rng.uniform(minx, maxx), rng.uniform(miny, maxy))
-                if not (_valid(inner, g) if buffers_on else inner.contains(Point(g))):
+                if not _valid(g):
                     continue
                 d_km = math.hypot(g[0] - s[0], g[1] - s[1]) * NM2KM
                 if goal_min <= d_km <= goal_max:
                     return s, g
             return None
 
-        placement = _try(sector_poly.buffer(-self.agent_start_margin_nm), True)
+        placement = _try(sector_poly.buffer(-self.agent_start_margin_nm), self.obstacle_clearance_nm)
         if placement is None:
-            # relax: smaller inward margin, drop the obstacle clearance
-            # (start separation is kept — it prevents episodes that begin in intrusion)
-            placement = _try(sector_poly.buffer(-self.agent_start_margin_nm / 2.0), False)
+            # relax: smaller inward margin and obstacle clearance, then only
+            # "outside every obstacle" -- a start or goal is never placed inside
+            # one (start separation is kept — it prevents episodes that begin in intrusion)
+            inner = sector_poly.buffer(-self.agent_start_margin_nm / 2.0)
+            placement = (_try(inner, self.relaxed_obstacle_clearance_nm)
+                         or _try(inner, 0.0))
         if placement is None:
             raise ValueError(
                 "ScenarioGenerator: could not place agent start/goal; "
