@@ -12,8 +12,11 @@ so this still shows the task, the other aircraft/intruders, the obstacles and
 the sector.
 
 It also doubles as the tool competitors can use to produce their required
-short video of behaviour on a handful of scenarios: pass your own seeds (and,
-if you like, plug your trained policy into ``policy_from_model`` below).
+short video of behaviour on a handful of scenarios: pass your own seeds, and
+plug your env (``make_env``) and trained policy (``policy_from_model``) into the
+EDIT block below. Each scenario is recorded until the env ends the episode
+(goal reached or ``episode_time_limit`` simulated seconds), whatever the
+``action_frequency``.
 
 Run it as a module from the repo root (like the other scripts/ files):
 
@@ -43,6 +46,25 @@ DEFAULT_SA_GIF = os.path.join(REPO_ROOT, "docs", "media", "competition", "single
 DEFAULT_MA_GIF = os.path.join(REPO_ROOT, "docs", "media", "competition", "multi_agent.gif")
 
 
+# ==================== EDIT THESE TWO FOR YOUR SUBMISSION ======================
+def make_env(kind, render_mode="rgb_array", n_agents=10):
+    """Return the environment to record (``kind`` is "sa" or "ma").
+
+    Default = the base competition env. Use the same env subclass / wrapper
+    stack as ``make_env`` in ``scripts/evaluate_competition.py``, so the video
+    shows the agent you evaluated, e.g.
+    ``return MyObsWrapper(gym.make("CompetitionEnv-v0", render_mode=render_mode))``.
+    Keep ``render_mode``: frames are captured with ``env.render()``.
+    """
+    if kind == "sa":
+        import gymnasium as gym
+        import bluesky_gym
+        bluesky_gym.register_envs()
+        return gym.make("CompetitionEnv-v0", render_mode=render_mode)
+    from bluesky_zoo.competition_v0 import CompetitionZooEnv
+    return CompetitionZooEnv(render_mode=render_mode, n_agents=n_agents)
+
+
 def policy_from_model(model_path):
     """Return an ``act(obs) -> action`` callable, or None for a neutral policy.
 
@@ -53,21 +75,22 @@ def policy_from_model(model_path):
     if model_path is None:
         return None
     raise NotImplementedError("plug your trained policy into policy_from_model()")
+# =============================================================================
 
 
-def rollout_single_agent(seed, act=None, max_steps=400):
-    """Collect rgb_array frames for one CompetitionEnv-v0 episode."""
-    import gymnasium as gym
-    import bluesky_gym
-    bluesky_gym.register_envs()
+def rollout_single_agent(seed, act=None, max_steps=None):
+    """Collect rgb_array frames for one ``make_env("sa")`` episode.
 
-    env = gym.make("CompetitionEnv-v0", render_mode="rgb_array")
+    Runs until the env terminates or truncates (it truncates itself on
+    simulated time). ``max_steps`` optionally caps the number of env steps.
+    """
+    env = make_env("sa")
     frames = []
     obs, _ = env.reset(seed=seed)
     frames.append(env.render())
     terminated = truncated = False
     steps = 0
-    while not (terminated or truncated) and steps < max_steps:
+    while not (terminated or truncated) and (max_steps is None or steps < max_steps):
         action = np.zeros(2, dtype=np.float32) if act is None else act(obs)
         obs, _, terminated, truncated, _ = env.step(action)
         frames.append(env.render())
@@ -76,16 +99,18 @@ def rollout_single_agent(seed, act=None, max_steps=400):
     return frames
 
 
-def rollout_multi_agent(seed, n_agents=10, act=None, max_steps=400):
-    """Collect rgb_array frames for one CompetitionZooEnv episode."""
-    from bluesky_zoo.competition_v0 import CompetitionZooEnv
+def rollout_multi_agent(seed, n_agents=10, act=None, max_steps=None):
+    """Collect rgb_array frames for one ``make_env("ma")`` episode.
 
-    env = CompetitionZooEnv(render_mode="rgb_array", n_agents=n_agents)
+    Runs until no agents are left (the env ends the episode on simulated
+    time). ``max_steps`` optionally caps the number of env steps.
+    """
+    env = make_env("ma", n_agents=n_agents)
     frames = []
     observations, _ = env.reset(seed=seed)
     frames.append(env.render())
     steps = 0
-    while env.agents and steps < max_steps:
+    while env.agents and (max_steps is None or steps < max_steps):
         if act is None:
             actions = {a: np.zeros(2, dtype=np.float32) for a in env.agents}
         else:
