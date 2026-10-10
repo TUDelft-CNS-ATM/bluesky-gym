@@ -65,12 +65,16 @@ EVAL_EPISODES = 12   # per-agent episodes to average over
 MODEL_PATH = "ppo_competition"
 
 
-def make_vec_env():
+def make_vec_env(seed=SEED):
     env = CompetitionZooEnv(render_mode=None, n_agents=N_AGENTS)
+    # Seed the scenario stream; the vector stack's (unseeded) resets continue it.
+    # The stack cannot pass a seed down itself (venv.seed / PPO(seed=) fail).
+    env.reset(seed=seed)
     env = FlattenObs(env)          # Dict obs -> flat Box, so plain MlpPolicy works
     env = ss.black_death_v3(env)   # keep terminated agents (zero-padded) until episode end
     env = ss.pettingzoo_env_to_vec_env_v1(env)   # -> N sub-envs, one shared policy
     env = SB3VecEnvWrapper(env)    # SB3 VecEnv API directly (NOT concat_vec_envs_v1; see module docstring)
+    env.action_space.seed(seed)    # random-policy baseline in evaluate()
     return VecMonitor(env)         # records per-episode returns in info["episode"]
 
 
