@@ -124,6 +124,45 @@ def _separated(p, others, min_d):
     return all(math.hypot(p[0] - o[0], p[1] - o[1]) >= min_d for o in others)
 
 
+def _disc_overlap(line, frac_max, centre, radius):
+    """Normalized fractions ``(lo, hi)`` of ``line`` within [0, frac_max] lying
+    strictly within ``radius`` NM of ``centre`` (an empty overlap gives lo >= hi).
+
+    The part of ``line`` up to ``frac_max`` must be straight (on its first leg).
+    """
+    p0 = line.coords[0]
+    p1 = line.interpolate(frac_max, normalized=True)
+    dx, dy = p1.x - p0[0], p1.y - p0[1]
+    fx, fy = p0[0] - centre[0], p0[1] - centre[1]
+    a = dx * dx + dy * dy
+    b = 2.0 * (fx * dx + fy * dy)
+    c = fx * fx + fy * fy - radius * radius
+    disc = b * b - 4.0 * a * c
+    if a == 0.0 or disc <= 0.0:          # no crossing: all inside or all outside
+        return (0.0, frac_max) if c < 0.0 else (frac_max, 0.0)
+    root = math.sqrt(disc)
+    t0 = (-b - root) / (2.0 * a)
+    t1 = (-b + root) / (2.0 * a)
+    return frac_max * max(t0, 0.0), frac_max * min(t1, 1.0)
+
+
+def _remap_outside(u, lo, hi, width):
+    """Move ``u`` in [0, width] out of the open interval (lo, hi).
+
+    Values outside (lo, hi) are returned unchanged; values inside are mapped
+    linearly onto [0, lo] + [hi, width]. If ``u`` is uniform on [0, width], the
+    result is uniform on [0, lo] + [hi, width] -- the same distribution as
+    redrawing until ``u`` falls outside (lo, hi) -- but no extra draw is taken,
+    so the rest of the RNG stream is unaffected. If (lo, hi) covers the whole
+    range, ``width`` is returned.
+    """
+    if not lo < u < hi:
+        return u
+    free = width - (hi - lo)
+    q = (u - lo) / (hi - lo) * free
+    return q if q < lo else hi + (q - lo)
+
+
 def resample_perimeter(vertices, n):
     """Resample a polygon boundary into ``n`` points evenly spaced by arc length.
 
@@ -171,6 +210,19 @@ class ScenarioGenerator:
         at their spawn points. Goals are unconstrained relative to each other
         (they may coincide); each start is far from its own goal via
         ``goal_distance_range``.
+    intruder_spawn_clearance_nm : float
+        Minimum distance between every intruder's spawn point and the (first)
+        agent's start: the intruder counterpart of ``agent_separation_nm``, so
+        no episode begins with an intruder in conflict. A spawn drawn inside
+        the clearance is moved to a uniformly distributed clear point of the
+        same spawn window, without extra RNG draws. 0 disables it.
+    intruder_speed_max : float or None
+        Drawn intruder speeds are clipped to this value (m/s). The default is
+        the A320 maximum CAS in BlueSky's OpenAP model at the competition
+        altitude (350 m); BlueSky slows faster intruders down to it after
+        spawning anyway, so the clip makes ``Route.speed`` the speed actually
+        flown. Clipping (rather than narrowing ``intruder_speed_range``)
+        leaves the RNG draws unchanged. None disables it.
     """
 
     def __init__(self, n_obstacles=5, n_intruders=5, n_agents=1,
@@ -183,7 +235,9 @@ class ScenarioGenerator:
                  agent_start_margin_nm=10.0,
                  obstacle_clearance_nm=10.0,
                  route_agent_proximity_nm=15.0,
-                 agent_separation_nm=10.0):
+                 agent_separation_nm=10.0,
+                 intruder_spawn_clearance_nm=10.0,
+                 intruder_speed_max=163.0):
         self.n_obstacles = n_obstacles
         self.n_intruders = n_intruders
         self.n_agents = n_agents
@@ -197,6 +251,8 @@ class ScenarioGenerator:
         self.obstacle_clearance_nm = obstacle_clearance_nm
         self.route_agent_proximity_nm = route_agent_proximity_nm
         self.agent_separation_nm = agent_separation_nm
+        self.intruder_spawn_clearance_nm = intruder_spawn_clearance_nm
+        self.intruder_speed_max = intruder_speed_max
 
     # -- sector --------------------------------------------------------------
     def _generate_sector(self, rng):
@@ -288,6 +344,10 @@ class ScenarioGenerator:
         perimeter = sector_poly.exterior
         total = perimeter.length
         agent_line = LineString([start, goal])
+        clearance = self.intruder_spawn_clearance_nm
+        # intruders spawn on the first 40% of their route; this window is
+        # straight (the two legs of a 3-point route are equally long)
+        window = 0.4
         routes = []
 
         for i in range(self.n_intruders):
@@ -329,6 +389,11 @@ class ScenarioGenerator:
                 else:
                     if hits:
                         continue
+                # a route whose whole spawn window lies within the spawn
+                # clearance is unusable (not possible for the default sector sizes)
+                lo, hi = _disc_overlap(route_line, window, start, clearance)
+                if lo <= 0.0 and hi >= window:
+                    continue
                 chosen = pts
                 break
 
@@ -340,11 +405,19 @@ class ScenarioGenerator:
                 chosen = fallback
 
             route_line = LineString(chosen)
-            frac = rng.uniform(0.0, 0.4)
+            frac = rng.uniform(0.0, window)
+            # keep the spawn point at least `clearance` from the agent start: a
+            # draw inside it is remapped onto the clear part of the window
+            # (uniform there, no extra draw). Only the fallback route can be
+            # fully blocked; it then spawns at the window end.
+            lo, hi = _disc_overlap(route_line, window, start, clearance)
+            frac = _remap_outside(frac, lo, hi, window)
             sp = route_line.interpolate(frac, normalized=True)
             waypoints_nm = [(sp.x, sp.y)] + list(chosen[1:])
             waypoints_ll = [_nm_to_latlon(self.center, p) for p in waypoints_nm]
             speed = float(rng.uniform(*self.intruder_speed_range))
+            if self.intruder_speed_max is not None:
+                speed = min(speed, self.intruder_speed_max)
             routes.append(Route(ac_id=f"AC{i + 1}", waypoints=waypoints_ll, speed=speed))
 
         return routes
