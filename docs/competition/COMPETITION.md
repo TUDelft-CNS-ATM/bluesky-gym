@@ -118,6 +118,9 @@ a global conflict count):
 | **Efficiency** | `flight_time` | seconds flown (lower = more direct) |
 | _(reference only)_ | `total_reward` | your own reward — **not comparable across teams** |
 
+Obstacles may overlap; overlapping obstacles form one restricted region, so
+flying through them counts as a single restricted-area event.
+
 A good agent keeps the **goal-completion rate high** while driving the **safety
 metrics to zero** and keeping **flight time low**. There is no single scalar
 formula — judges weigh these together with novelty and documentation (below).

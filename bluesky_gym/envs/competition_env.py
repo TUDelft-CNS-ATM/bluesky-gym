@@ -342,12 +342,14 @@ class CompetitionEnv(gym.Env):
         m["intrusion_time"] += len(now_intr) * dt
         self._intruders_in_intrusion = now_intr
 
-        # restricted-area entries
+        # restricted-area entries: rising edge of "inside any obstacle", so
+        # overlapping obstacles count as one region (as for the union time)
         now_obs = set()
         for name in self._obstacle_area_names:
             if self._check_inside(name, lat, lon, alt):
                 now_obs.add(name)
-        m["restricted_area_events"] += len(now_obs - self._obstacles_occupied)
+        if now_obs and not self._obstacles_occupied:
+            m["restricted_area_events"] += 1
         if now_obs:
             m["time_in_restricted_area"] += dt
         self._obstacles_occupied = now_obs
