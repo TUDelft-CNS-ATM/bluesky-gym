@@ -17,6 +17,16 @@ def _bound_angle(angle_deg):
     return ((angle_deg + 180) % 360) - 180
 
 
+def _cmd_float(value):
+    """Format a float for a stack command without an exponent.
+
+    ``str()`` switches to scientific notation below 1e-4 (e.g. ``-1e-05``),
+    which BlueSky's ``txt2hdg`` rejects. This gives the same shortest
+    round-trip digits as ``str()`` in fixed-point notation.
+    """
+    return np.format_float_positional(value, trim="0")
+
+
 def _discrete_to_float(action, n_discrete):
     """Map a Discrete(2*n+1) index to a float in [-1, 1]. Index n → 0.0."""
     return (int(action) - n_discrete) / n_discrete
@@ -73,7 +83,7 @@ class HeadingAction:
             action = _discrete_to_float(action, self.n_discrete)
         ac_idx = bs.traf.id2idx(ac_id)
         new_hdg = _bound_angle(bs.traf.hdg[ac_idx] + float(action) * self.d_heading)
-        bs.stack.stack(f"HDG {ac_id} {new_hdg}")
+        bs.stack.stack(f"HDG {ac_id} {_cmd_float(new_hdg)}")
 
 
 class SpeedAction:
@@ -82,8 +92,8 @@ class SpeedAction:
 
     The action is a normalized value in [-1, 1] (continuous) or a Discrete
     index (discrete). The ownship CAS is queried from the current BlueSky
-    simulation state and ``action * d_speed`` (m/s) is added before issuing
-    a SPD command in knots.
+    simulation state and ``action * d_speed`` (knots) is added before issuing
+    a SPD command in knots CAS.
 
     Parameters
     ----------
@@ -107,7 +117,7 @@ class SpeedAction:
             action = _discrete_to_float(action, self.n_discrete)
         ac_idx = bs.traf.id2idx(ac_id)
         new_spd = (bs.traf.cas[ac_idx] + float(action) * self.d_speed / MpS2Kt) * MpS2Kt
-        bs.stack.stack(f"SPD {ac_id} {new_spd}")
+        bs.stack.stack(f"SPD {ac_id} {_cmd_float(new_spd)}")
 
 
 class VerticalSpeedAction:

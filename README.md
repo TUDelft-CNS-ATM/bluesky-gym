@@ -26,6 +26,11 @@ a single-agent and a multi-agent environment.
 - **[Getting started guide](docs/competition/GETTING_STARTED.md)** — install, run
   the demo scripts, understand `train_zoo.py`, and customize the MDP.
 
+> **Installing for the competition:** the competition environments are only on the
+> `AI4REAL-NET-Competition` branch. The PyPI package (`pip install bluesky-gym`, see
+> [Installation](#installation)) does not include them; clone the branch and run `uv sync`
+> as described in [Getting started → Setup](docs/competition/GETTING_STARTED.md#1-setup).
+
 ## Submission & logistics
 
 - **Registration** Fill in this [form](https://docs.google.com/forms/d/e/1FAIpQLSf1fAvrqL4DiNEgy2Q2FqvpXCvjDhMMJ4fvAJTnOo0YH-SRQw/viewform?usp=publish-editor)
