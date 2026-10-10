@@ -150,6 +150,7 @@ class CompetitionEnv(gym.Env):
             n_obstacles=n_obstacles, n_intruders=n_intruders,
             agent_speed=ac_spd, center=center)
 
+        self._scenario_rng = None   # scenario-only RNG, seeded in reset()
         self._area_names = []
         self.metrics = {}
 
@@ -170,8 +171,16 @@ class CompetitionEnv(gym.Env):
         self._area_names = []
         self._obstacle_area_names = []
 
+        # Scenarios are drawn from a private RNG that only reset() touches, so
+        # draws from self.np_random by MDP hooks or wrappers cannot shift the
+        # scenario stream. default_rng(seed) is seeded exactly like gymnasium's
+        # np_random, so the scenario sequence of a given seed is unchanged.
+        # Like np_random, it continues across unseeded resets.
+        if seed is not None or self._scenario_rng is None:
+            self._scenario_rng = np.random.default_rng(seed)
+
         # fixed scenario if one was supplied to the constructor, else seeded random
-        scenario = self._fixed_scenario or self.scenario_generator.generate(self.np_random)
+        scenario = self._fixed_scenario or self.scenario_generator.generate(self._scenario_rng)
         self.scenario = scenario
         center_arr = np.array(scenario.center)
 
