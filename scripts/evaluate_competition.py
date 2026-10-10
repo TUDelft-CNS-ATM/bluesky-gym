@@ -1,11 +1,15 @@
 """
 Official evaluation harness for the competition.
 
-Runs the canonical scoring protocol — the **first 1000 episodes of seed 42** —
+Runs the canonical scoring protocol (the **first 1000 episodes of seed 42**)
 and prints the standard metrics table (plus a per-episode CSV you can share so
 judges can reproduce the numbers). Seed 42 is set on the first reset only;
 subsequent resets continue the same RNG stream, giving a deterministic,
 reproducible sequence of scenarios.
+
+CSV columns: `episode_index` (row number), `episode`, `agent_id` (multi-agent
+only), `scenario_hash` (a short hash of the episode's scenario, so judges can
+check that two CSVs were scored on the same scenarios), then the metrics.
 
 Run it as a module from the repo root:
 
@@ -16,12 +20,15 @@ Run it as a module from the repo root:
 
 The two functions in the EDIT block below are the only things a competitor
 changes: point `make_env` at your env subclass / wrapper stack, and load your
-trained policy in `load_policy`. Everything else — the fixed scoring params,
-the scenario distribution, and the metrics — stays as-is.
+trained policy in `load_policy`. Everything else (the fixed scoring params,
+the scenario distribution, and the metrics) stays as-is.
 """
 
 import argparse
 import csv
+import dataclasses
+import hashlib
+import json
 import os
 
 import numpy as np
@@ -39,6 +46,11 @@ METRIC_KEYS = [
     "sector_exit_events", "time_outside_sector",
     "total_reward",
 ]
+
+# Per-row identifiers, written between episode_index (the plain row number,
+# kept for backwards compatibility) and the metrics.
+ID_KEYS = {"sa": ["episode", "scenario_hash"],
+           "ma": ["episode", "agent_id", "scenario_hash"]}
 
 
 # ==================== EDIT THESE TWO FOR YOUR SUBMISSION ======================
@@ -75,16 +87,36 @@ def load_policy(kind, model_path=None):
 # =============================================================================
 
 
+def scenario_hash(scenario):
+    """Short, stable id of a ``core.scenario.Scenario``: the first 16 hex
+    digits of the SHA-256 of all its fields (sector, obstacles, agent
+    starts/goals/headings/speeds, intruder routes/speeds) as canonical JSON,
+    with numbers rounded to 9 decimals so float noise far below the scenario
+    resolution does not change it."""
+    def canonical(x):
+        if isinstance(x, dict):
+            return {k: canonical(v) for k, v in x.items()}
+        if isinstance(x, (list, tuple, np.ndarray)):
+            return [canonical(v) for v in x]
+        if isinstance(x, (int, float, np.number)):
+            return round(float(x), 9) + 0.0   # + 0.0 folds -0.0 into 0.0
+        return x
+    blob = json.dumps(canonical(dataclasses.asdict(scenario)),
+                      sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
 def run_single_agent(n_episodes, act):
-    """One record (final info dict) per episode."""
+    """One record (final info dict + episode ids) per episode."""
     env = make_env("sa")
     records = []
     for ep in range(n_episodes):
         obs, info = env.reset(seed=SEED if ep == 0 else None)
+        ids = {"episode": ep, "scenario_hash": scenario_hash(env.unwrapped.scenario)}
         terminated = truncated = False
         while not (terminated or truncated):
             obs, _, terminated, truncated, info = env.step(act(obs))
-        records.append(dict(info))
+        records.append({**info, **ids})   # ids last: wrappers may add an "episode" info key
     env.close()
     return records
 
@@ -95,12 +127,14 @@ def run_multi_agent(n_episodes, act, n_agents):
     records = []
     for ep in range(n_episodes):
         observations, infos = env.reset(seed=SEED if ep == 0 else None)
+        h = scenario_hash(env.unwrapped.scenario)
         while env.agents:
             actions = {a: act(observations[a]) for a in env.agents}
             observations, _, terminations, truncations, infos = env.step(actions)
             for a in infos:
                 if terminations[a] or truncations[a]:
-                    records.append(dict(infos[a]))
+                    records.append({**infos[a], "episode": ep, "agent_id": a,
+                                    "scenario_hash": h})
     env.close()
     return records
 
@@ -125,23 +159,24 @@ def summarize(records, label):
     n = len(records)
     cols = {k: np.array([r[k] for r in records], dtype=float) for k in METRIC_KEYS}
 
-    print(f"\n### {label} — mean over {n} {'episodes' if label.startswith('Single') else 'agent-episodes'} (seed {SEED})\n")
+    print(f"\n### {label} - mean over {n} {'episodes' if label.startswith('Single') else 'agent-episodes'} (seed {SEED})\n")
     print("| Metric | Mean | Std |")
     print("| --- | ---: | ---: |")
     for name, key, tf in SUMMARY_ROWS:
         vals = tf(cols[key]) if tf else cols[key]
         print(f"| {name} | {vals.mean():.3f} | {vals.std():.3f} |")
     print(f"\n_total_reward (own reward, not comparable across teams): "
-          f"{cols['total_reward'].mean():.3f} ± {cols['total_reward'].std():.3f}_")
+          f"{cols['total_reward'].mean():.3f} +/- {cols['total_reward'].std():.3f}_")
 
 
-def write_csv(records, out_path):
+def write_csv(records, out_path, id_keys=()):
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    keys = list(id_keys) + METRIC_KEYS
     with open(out_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["episode_index"] + METRIC_KEYS)
+        writer = csv.DictWriter(f, fieldnames=["episode_index"] + keys)
         writer.writeheader()
         for i, r in enumerate(records):
-            writer.writerow({"episode_index": i, **{k: r[k] for k in METRIC_KEYS}})
+            writer.writerow({"episode_index": i, **{k: r[k] for k in keys}})
     print(f"\nwrote per-episode metrics to {out_path}")
 
 
@@ -153,8 +188,9 @@ def evaluate(kind, n_episodes, n_agents, model_path, out_path):
     else:
         records = run_multi_agent(n_episodes, act, n_agents)
         label = "Multi-agent"
+    # CSV first, so a console error while printing cannot lose the run
+    write_csv(records, out_path or f"competition_eval_{kind}.csv", ID_KEYS[kind])
     summarize(records, label)
-    write_csv(records, out_path or f"competition_eval_{kind}.csv")
 
 
 def main():
@@ -167,17 +203,22 @@ def main():
     parser.add_argument("--n-agents", type=int, default=N_AGENTS_MA,
                         help=f"agents for the multi-agent env (fixed: {N_AGENTS_MA})")
     parser.add_argument("--model", default=None, help="trained model path (see load_policy)")
-    parser.add_argument("--out", default=None, help="per-episode CSV output path")
+    parser.add_argument("--out", default=None,
+                        help="per-episode CSV output path (with --env both: "
+                             "<stem>_sa.csv and <stem>_ma.csv)")
     args = parser.parse_args()
 
     if args.episodes != N_EPISODES:
-        print(f"NOTE: running {args.episodes} episodes — the official protocol is "
+        print(f"NOTE: running {args.episodes} episodes - the official protocol is "
               f"{N_EPISODES} episodes of seed {SEED}.")
 
     kinds = ["sa", "ma"] if args.env == "both" else [args.env]
     for kind in kinds:
-        evaluate(kind, args.episodes, args.n_agents, args.model,
-                 args.out if args.env != "both" else None)
+        out = args.out
+        if out and args.env == "both":
+            stem, ext = os.path.splitext(out)   # one CSV per env
+            out = f"{stem}_{kind}{ext or '.csv'}"
+        evaluate(kind, args.episodes, args.n_agents, args.model, out)
 
 
 if __name__ == "__main__":
